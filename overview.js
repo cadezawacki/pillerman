@@ -1766,13 +1766,14 @@ export class OverviewWidget extends BaseWidget {
                 if (!eng) return;
                 const n = eng.numRows() | 0;
                 const getQt = eng._getValueGetter('QT');
-
-                // Build rows with per-bond QT-driven columns
-                const headers = ['Description', 'ISIN', 'QT', 'BVAL', 'MACP', 'CBBT', 'House'];
-                const rows = [];
                 const getDesc = eng._getValueGetter('description');
                 const getIsin = eng._getValueGetter('isin');
 
+                const headers = ['Description', 'ISIN', 'QT', 'BVAL', 'MACP', 'CBBT', 'House'];
+                const mktKeys = ['bval', 'macp', 'cbbt', 'house'];
+
+                // Collect rows with outlier index per row
+                const rowData = [];
                 for (let i = 0; i < n; i++) {
                     const qt = _normalizeQt(getQt(i));
                     if (!qt) continue;
@@ -1788,21 +1789,56 @@ export class OverviewWidget extends BaseWidget {
                         }
                     }
                     if (!_hasHighRefVariance(mids)) continue;
-                    rows.push([
-                        String(getDesc(i) ?? ''),
-                        String(getIsin(i) ?? ''),
-                        qt,
-                        vals.bval != null ? String(vals.bval) : '',
-                        vals.macp != null ? String(vals.macp) : '',
-                        vals.cbbt != null ? String(vals.cbbt) : '',
-                        vals.house != null ? String(vals.house) : '',
-                    ]);
+
+                    // Identify outlier: market furthest from mean
+                    const mean = mids.reduce((s, m) => s + m.val, 0) / mids.length;
+                    let outlierMkt = null, maxDev = 0;
+                    for (const { mkt, val } of mids) {
+                        const dev = Math.abs(val - mean);
+                        if (dev > maxDev) { maxDev = dev; outlierMkt = mkt; }
+                    }
+
+                    rowData.push({
+                        cells: [
+                            String(getDesc(i) ?? ''), String(getIsin(i) ?? ''), qt,
+                            ...mktKeys.map(k => vals[k] != null ? String(vals[k]) : ''),
+                        ],
+                        outlierMkt,
+                    });
                 }
 
-                const tableData = [headers, ...rows];
-                const table = buildTable(tableData);
-                const sub = rows.length > 0 ? `${rows.length} bond${rows.length > 1 ? 's' : ''}` : null;
-                const html = table ? table.outerHTML : '<p>No matching rows.</p>';
+                // Build table DOM manually to highlight outlier cells
+                const table = document.createElement('table');
+                table.classList.add('overview-modal-table');
+                const thead = document.createElement('thead');
+                const headTr = document.createElement('tr');
+                for (const h of headers) {
+                    const th = document.createElement('th');
+                    th.textContent = h;
+                    headTr.appendChild(th);
+                }
+                thead.appendChild(headTr);
+                table.appendChild(thead);
+
+                const tbody = document.createElement('tbody');
+                for (const { cells, outlierMkt } of rowData) {
+                    const tr = document.createElement('tr');
+                    for (let c = 0; c < cells.length; c++) {
+                        const td = document.createElement('td');
+                        td.textContent = cells[c];
+                        // Columns 3-6 map to mktKeys[0-3]
+                        if (c >= 3 && mktKeys[c - 3] === outlierMkt) {
+                            td.style.color = '#e05252';
+                            td.style.fontWeight = '600';
+                        }
+                        tr.appendChild(td);
+                    }
+                    tbody.appendChild(tr);
+                }
+                table.appendChild(tbody);
+
+                const sub = rowData.length > 0 ? `${rowData.length} bond${rowData.length > 1 ? 's' : ''}` : null;
+                const html = table.outerHTML;
                 p.mgr.createInfoModal('Ref Market Variance', html, 'warning', sub);
             },
         }, FLAGS);
