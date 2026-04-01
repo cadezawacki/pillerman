@@ -74,8 +74,21 @@ function maskByPredicate(engine, col, pred) {
 }
 
 /**
+ * Returns true when a value should be considered "missing" for
+ * benchmark comparison purposes — null, undefined, empty string,
+ * the literal strings "null"/"undefined"/"N/A", zero, or false.
+ */
+function _isMissingBenchmark(v) {
+    if (v == null) return true;                   // null | undefined
+    if (v === 0 || v === false) return true;      // falsy non-string
+    const s = String(v).trim().toLowerCase();
+    return s === '' || s === 'null' || s === 'undefined' || s === 'n/a';
+}
+
+/**
  * Given an engine and two column names, return a boolean mask
- * of which rows have mismatched values (skipping rows where either is null/empty).
+ * of which rows have mismatched values.
+ * A row is skipped (never flagged) when either side is missing.
  */
 function maskByMismatch(engine, colA, colB) {
     const n = engine.numRows() | 0;
@@ -84,8 +97,7 @@ function maskByMismatch(engine, colA, colB) {
     const mask = new Uint8Array(n);
     for (let i = 0; i < n; i++) {
         const a = getA(i), b = getB(i);
-        if (a == null || String(a).trim() === '') continue;
-        if (b == null || String(b).trim() === '') continue;
+        if (_isMissingBenchmark(a) || _isMissingBenchmark(b)) continue;
         if (a !== b) mask[i] = 1;
     }
     return mask;
@@ -947,8 +959,7 @@ export class OverviewWidget extends BaseWidget {
                 const right = data?.benchmarkIsin || [];
                 let count = 0;
                 for (let i = 0; i < Math.max(left.length, right.length); i++) {
-                    if (left[i] == null || String(left[i]).trim() === '') continue;
-                    if (right[i] == null || String(right[i]).trim() === '') continue;
+                    if (_isMissingBenchmark(left[i]) || _isMissingBenchmark(right[i])) continue;
                     if (left[i] !== right[i]) count++;
                 }
                 return count > 0 ? count : null;
@@ -972,8 +983,7 @@ export class OverviewWidget extends BaseWidget {
                 const right = data?.benchmarkIsin || [];
                 let count = 0;
                 for (let i = 0; i < Math.max(left.length, right.length); i++) {
-                    if (left[i] == null || String(left[i]).trim() === '') continue;
-                    if (right[i] == null || String(right[i]).trim() === '') continue;
+                    if (_isMissingBenchmark(left[i]) || _isMissingBenchmark(right[i])) continue;
                     if (left[i] !== right[i]) count++;
                 }
                 return count > 0 ? count : null;
@@ -1000,8 +1010,7 @@ export class OverviewWidget extends BaseWidget {
                 const right = data?.benchmarkIsin || [];
                 let count = 0;
                 for (let i = 0; i < Math.max(left.length, right.length); i++) {
-                    if (left[i] == null || String(left[i]).trim() === '') continue;
-                    if (right[i] == null || String(right[i]).trim() === '') continue;
+                    if (_isMissingBenchmark(left[i]) || _isMissingBenchmark(right[i])) continue;
                     if (left[i] !== right[i]) count++;
                 }
                 return count > 0 ? count : null;
