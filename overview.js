@@ -1112,6 +1112,304 @@ export class OverviewWidget extends BaseWidget {
                 p.mgr.createInfoModal(payload.title, payload.content, payload.type);
             },
         }, FLAGS);
+
+        // ────── Concentration ──────
+
+        pill('custom', {
+            id: 'pill_single_name_concentration', columns: ['ticker', 'grossSize'], type: 'warning',
+            valueGetter: async (data) => {
+                const tickers = data?.ticker || [];
+                const sizes = data?.grossSize || [];
+                const weights = new Map();
+                let total = 0;
+                for (let i = 0; i < tickers.length; i++) {
+                    const t = tickers[i];
+                    if (t == null || String(t).trim() === '') continue;
+                    const s = Math.abs(+sizes[i] || 0);
+                    total += s;
+                    weights.set(t, (weights.get(t) || 0) + s);
+                }
+                if (total === 0) return null;
+                let maxTicker = null, maxPct = 0;
+                for (const [t, w] of weights) {
+                    const pct = w / total;
+                    if (pct > maxPct) { maxPct = pct; maxTicker = t; }
+                }
+                return maxPct > 0.25 ? { ticker: maxTicker, pct: maxPct, weights, total } : null;
+            },
+            valueFormatter: (v) => v ? `${v.ticker} is ${Math.round(v.pct * 100)}% of Gross` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    const n = eng.numRows() | 0;
+                    const getTicker = eng._getValueGetter('ticker');
+                    const getSize = eng._getValueGetter('grossSize');
+                    const weights = new Map();
+                    let total = 0;
+                    for (let i = 0; i < n; i++) {
+                        const t = getTicker(i);
+                        if (t == null || String(t).trim() === '') continue;
+                        const s = Math.abs(+getSize(i) || 0);
+                        total += s;
+                        weights.set(t, (weights.get(t) || 0) + s);
+                    }
+                    if (total === 0) return '';
+                    const lines = [];
+                    for (const [t, w] of weights) {
+                        const pct = w / total;
+                        if (pct > 0.25) lines.push(`${t}: ${Math.round(pct * 100)}%`);
+                    }
+                    return lines.join('\n') || '';
+                },
+            },
+            modal: (_e, p) => {
+                const eng = p.mgr.engine;
+                if (!eng) return;
+                const n = eng.numRows() | 0;
+                const getTicker = eng._getValueGetter('ticker');
+                const getSize = eng._getValueGetter('grossSize');
+                const weights = new Map();
+                let total = 0;
+                for (let i = 0; i < n; i++) {
+                    const t = getTicker(i);
+                    if (t == null || String(t).trim() === '') continue;
+                    const s = Math.abs(+getSize(i) || 0);
+                    total += s;
+                    weights.set(t, (weights.get(t) || 0) + s);
+                }
+                const concentrated = new Set();
+                for (const [t, w] of weights) { if (w / total > 0.25) concentrated.add(t); }
+                const mask = new Uint8Array(n);
+                for (let i = 0; i < n; i++) { if (concentrated.has(getTicker(i))) mask[i] = 1; }
+                mkModal('Single-Name Concentration', () => mask, 'warning', {
+                    ticker: 'Ticker', description: 'Description', isin: 'ISIN', grossSize: 'Size',
+                })(p);
+            },
+        }, FLAGS);
+
+        pill('custom', {
+            id: 'pill_sector_concentration', columns: ['issuerIndustrySector', 'grossSize'], type: 'warning',
+            valueGetter: async (data) => {
+                const sectors = data?.issuerIndustrySector || [];
+                const sizes = data?.grossSize || [];
+                const weights = new Map();
+                let total = 0;
+                for (let i = 0; i < sectors.length; i++) {
+                    const s = sectors[i];
+                    if (s == null || String(s).trim() === '') continue;
+                    const sz = Math.abs(+sizes[i] || 0);
+                    total += sz;
+                    weights.set(s, (weights.get(s) || 0) + sz);
+                }
+                if (total === 0) return null;
+                let maxSector = null, maxPct = 0;
+                for (const [s, w] of weights) {
+                    const pct = w / total;
+                    if (pct > maxPct) { maxPct = pct; maxSector = s; }
+                }
+                return maxPct > 0.4 ? { sector: maxSector, pct: maxPct } : null;
+            },
+            valueFormatter: (v) => v ? `Sector: ${v.sector} ${Math.round(v.pct * 100)}%` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    const n = eng.numRows() | 0;
+                    const getSector = eng._getValueGetter('issuerIndustrySector');
+                    const getSize = eng._getValueGetter('grossSize');
+                    const weights = new Map();
+                    let total = 0;
+                    for (let i = 0; i < n; i++) {
+                        const s = getSector(i);
+                        if (s == null || String(s).trim() === '') continue;
+                        const sz = Math.abs(+getSize(i) || 0);
+                        total += sz;
+                        weights.set(s, (weights.get(s) || 0) + sz);
+                    }
+                    if (total === 0) return '';
+                    const lines = [];
+                    for (const [s, w] of weights) {
+                        const pct = w / total;
+                        if (pct > 0.4) lines.push(`${s}: ${Math.round(pct * 100)}%`);
+                    }
+                    return lines.join('\n') || '';
+                },
+            },
+            modal: (_e, p) => {
+                const eng = p.mgr.engine;
+                if (!eng) return;
+                const n = eng.numRows() | 0;
+                const getSector = eng._getValueGetter('issuerIndustrySector');
+                const getSize = eng._getValueGetter('grossSize');
+                const weights = new Map();
+                let total = 0;
+                for (let i = 0; i < n; i++) {
+                    const s = getSector(i);
+                    if (s == null || String(s).trim() === '') continue;
+                    const sz = Math.abs(+getSize(i) || 0);
+                    total += sz;
+                    weights.set(s, (weights.get(s) || 0) + sz);
+                }
+                const concentrated = new Set();
+                for (const [s, w] of weights) { if (w / total > 0.4) concentrated.add(s); }
+                const mask = new Uint8Array(n);
+                for (let i = 0; i < n; i++) { if (concentrated.has(getSector(i))) mask[i] = 1; }
+                mkModal('Sector Concentration', () => mask, 'warning', {
+                    issuerIndustrySector: 'Sector', issuerIndustry: 'Industry', description: 'Description', grossSize: 'Size',
+                })(p);
+            },
+        }, FLAGS);
+
+        // ────── Liquidity ──────
+
+        pill('custom', {
+            id: 'pill_liq_score_divergence', columns: ['macpLiqScore', 'lqaLiqScore'], type: 'warning',
+            valueGetter: async (data) => {
+                const macp = data?.macpLiqScore || [];
+                const lqa = data?.lqaLiqScore || [];
+                let count = 0;
+                for (let i = 0; i < Math.max(macp.length, lqa.length); i++) {
+                    const m = +macp[i], l = +lqa[i] / 100;
+                    if (!Number.isFinite(m) || !Number.isFinite(l)) continue;
+                    if (Math.abs(m - l) > 2) count++;
+                }
+                return count > 0 ? count : null;
+            },
+            valueFormatter: (count) => count ? `Liq Score Divergence: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    const n = eng.numRows() | 0;
+                    const getM = eng._getValueGetter('macpLiqScore');
+                    const getL = eng._getValueGetter('lqaLiqScore');
+                    const mask = new Uint8Array(n);
+                    for (let i = 0; i < n; i++) {
+                        const m = +getM(i), l = +getL(i) / 100;
+                        if (!Number.isFinite(m) || !Number.isFinite(l)) continue;
+                        if (Math.abs(m - l) > 2) mask[i] = 1;
+                    }
+                    return tooltipFromLines(buildLines(eng, mask, ['description', 'macpLiqScore', 'lqaLiqScore']));
+                },
+            },
+            modal: (_e, p) => {
+                const eng = p.mgr.engine;
+                if (!eng) return;
+                const n = eng.numRows() | 0;
+                const getM = eng._getValueGetter('macpLiqScore');
+                const getL = eng._getValueGetter('lqaLiqScore');
+                const mask = new Uint8Array(n);
+                for (let i = 0; i < n; i++) {
+                    const m = +getM(i), l = +getL(i) / 100;
+                    if (!Number.isFinite(m) || !Number.isFinite(l)) continue;
+                    if (Math.abs(m - l) > 2) mask[i] = 1;
+                }
+                mkModal('Liquidity Score Divergence (CP+ vs LQA)', () => mask, 'warning', {
+                    description: 'Description', isin: 'ISIN', macpLiqScore: 'CP+ Score', lqaLiqScore: 'LQA Score (raw)',
+                })(p);
+            },
+        }, FLAGS);
+
+        // ────── Data Quality ──────
+
+        pill('custom', {
+            id: 'pill_duplicate_isins', columns: 'isin', type: 'error',
+            valueGetter: async (data) => {
+                const arr = Array.isArray(data) ? data : Object.values(data || {})[0] || [];
+                const counts = new Map();
+                for (const v of arr) {
+                    if (v == null || String(v).trim() === '') continue;
+                    const k = String(v).trim();
+                    counts.set(k, (counts.get(k) || 0) + 1);
+                }
+                let dupes = 0;
+                for (const n of counts.values()) if (n > 1) dupes += n;
+                return dupes > 0 ? dupes : null;
+            },
+            valueFormatter: (count) => count ? `Duplicate ISINs: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    const n = eng.numRows() | 0;
+                    const getter = eng._getValueGetter('isin');
+                    const counts = new Map();
+                    for (let i = 0; i < n; i++) {
+                        const v = getter(i);
+                        if (v == null || String(v).trim() === '') continue;
+                        counts.set(String(v).trim(), (counts.get(String(v).trim()) || 0) + 1);
+                    }
+                    const mask = new Uint8Array(n);
+                    for (let i = 0; i < n; i++) {
+                        const v = getter(i);
+                        if (v != null && counts.get(String(v).trim()) > 1) mask[i] = 1;
+                    }
+                    return tooltipFromLines(buildLines(eng, mask));
+                },
+            },
+            modal: (_e, p) => {
+                const eng = p.mgr.engine;
+                if (!eng) return;
+                const n = eng.numRows() | 0;
+                const getter = eng._getValueGetter('isin');
+                const counts = new Map();
+                for (let i = 0; i < n; i++) {
+                    const v = getter(i);
+                    if (v == null || String(v).trim() === '') continue;
+                    counts.set(String(v).trim(), (counts.get(String(v).trim()) || 0) + 1);
+                }
+                const mask = new Uint8Array(n);
+                for (let i = 0; i < n; i++) {
+                    const v = getter(i);
+                    if (v != null && counts.get(String(v).trim()) > 1) mask[i] = 1;
+                }
+                mkModal('Duplicate ISINs', () => mask, 'error', {
+                    isin: 'ISIN', description: 'Description', userSide: 'Side', grossSize: 'Size',
+                }, null, ['isin'])(p);
+            },
+        }, FLAGS);
+
+        pill('custom', {
+            id: 'pill_matured_bonds', columns: 'maturityDate', type: 'error',
+            valueGetter: async (data) => {
+                const arr = Array.isArray(data) ? data : Object.values(data || {})[0] || [];
+                const now = Date.now();
+                let count = 0;
+                for (const v of arr) {
+                    if (v == null) continue;
+                    const d = new Date(v);
+                    if (!isNaN(d.getTime()) && d.getTime() < now) count++;
+                }
+                return count > 0 ? count : null;
+            },
+            valueFormatter: (count) => count ? `Matured Bonds: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    const now = Date.now();
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'maturityDate', (v) => {
+                        if (v == null) return false;
+                        const d = new Date(v);
+                        return !isNaN(d.getTime()) && d.getTime() < now;
+                    })));
+                },
+            },
+            modal: (_e, p) => {
+                const now = Date.now();
+                mkModal('Matured Bonds', (eng) => maskByPredicate(eng, 'maturityDate', (v) => {
+                    if (v == null) return false;
+                    const d = new Date(v);
+                    return !isNaN(d.getTime()) && d.getTime() < now;
+                }), 'error', ['description', 'isin', 'maturityDate', 'grossSize'])(p);
+            },
+        }, FLAGS);
     }
 
     /* ════════════════════════════════════════════════════════════════════════
