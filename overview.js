@@ -74,6 +74,25 @@ function maskByPredicate(engine, col, pred) {
 }
 
 /**
+ * Given an engine and two column names, return a boolean mask
+ * of which rows have mismatched values (skipping rows where both are missing).
+ */
+function maskByMismatch(engine, colA, colB) {
+    const n = engine.numRows() | 0;
+    const getA = engine._getValueGetter(colA);
+    const getB = engine._getValueGetter(colB);
+    const mask = new Uint8Array(n);
+    for (let i = 0; i < n; i++) {
+        const a = getA(i), b = getB(i);
+        const aMissing = a == null || String(a).trim() === '';
+        const bMissing = b == null || String(b).trim() === '';
+        if (aMissing && bMissing) continue;
+        if (a !== b) mask[i] = 1;
+    }
+    return mask;
+}
+
+/**
  * Build human-readable summary lines from a mask.
  * Returns array of strings like "AAPL 5.25 2030 — ISIN: US037833..."
  */
@@ -743,11 +762,17 @@ export class OverviewWidget extends BaseWidget {
 
         /* ═══════ FLAG PILLS (warnings / errors — mounted to FLAGS) ═══════ */
 
+        // Inline count helper — pill.equals is NOT persisted by the Pill
+        // constructor, so the count recipe's default test always falls back
+        // to (v) => v != null.  We provide our own valueGetter to embed
+        // the predicate directly inside the closure.
+        const countBy = (pred) => async (data) => (data || []).filter(pred).length;
+
         // ────── Missing Data ──────
 
         pill('count', {
-            id: 'pill_missing_descriptions', columns: 'description',
-            equals: (v) => v == null || String(v).trim() === '', min: 1, type: 'error',
+            id: 'pill_missing_descriptions', columns: 'description', type: 'error',
+            valueGetter: countBy((v) => v == null || String(v).trim() === ''),
             valueFormatter: (count) => count > 0 ? `Missing Descriptions: ${count}` : null,
             tooltip: true,
             tooltipConfig: {
@@ -761,8 +786,8 @@ export class OverviewWidget extends BaseWidget {
         }, FLAGS);
 
         pill('count', {
-            id: 'pill_missing_dv01', columns: 'grossDv01',
-            equals: (v) => v == null, min: 1, type: 'error',
+            id: 'pill_missing_dv01', columns: 'grossDv01', type: 'error',
+            valueGetter: countBy((v) => v == null),
             valueFormatter: (count) => count > 0 ? `Missing DV01: ${count}` : null,
             tooltip: true,
             tooltipConfig: {
@@ -776,8 +801,8 @@ export class OverviewWidget extends BaseWidget {
         }, FLAGS);
 
         pill('count', {
-            id: 'pill_missing_desig', columns: 'desigName',
-            equals: (v) => v == null || String(v).trim() === '', min: 1, type: 'error',
+            id: 'pill_missing_desig', columns: 'desigName', type: 'error',
+            valueGetter: countBy((v) => v == null || String(v).trim() === ''),
             valueFormatter: (count) => count > 0 ? `Missing Desig: ${count}` : null,
             tooltip: true,
             tooltipConfig: {
@@ -791,8 +816,8 @@ export class OverviewWidget extends BaseWidget {
         }, FLAGS);
 
         pill('count', {
-            id: 'pill_missing_assigned', columns: 'assignedTrader',
-            equals: (v) => v == null || String(v).trim() === '', min: 1, type: 'error',
+            id: 'pill_missing_assigned', columns: 'assignedTrader', type: 'error',
+            valueGetter: countBy((v) => v == null || String(v).trim() === ''),
             valueFormatter: (count) => count > 0 ? `Unassigned: ${count}` : null,
             tooltip: true,
             tooltipConfig: {
@@ -808,8 +833,8 @@ export class OverviewWidget extends BaseWidget {
         // ────── Trade Flags ──────
 
         pill('count', {
-            id: 'pill_dnt_count', columns: 'isDnt',
-            equals: (v) => coerceToBool(v), min: 1, type: 'error',
+            id: 'pill_dnt_count', columns: 'isDnt', type: 'error',
+            valueGetter: countBy((v) => coerceToBool(v)),
             valueFormatter: (count) => count > 0 ? `DNT Bonds: ${count}` : null,
             tooltip: true,
             tooltipConfig: {
@@ -826,8 +851,8 @@ export class OverviewWidget extends BaseWidget {
         }, FLAGS);
 
         pill('count', {
-            id: 'pill_restrictedCode_count', columns: 'restrictedCode',
-            equals: (v) => v != null, min: 1, type: 'error',
+            id: 'pill_restrictedCode_count', columns: 'restrictedCode', type: 'error',
+            valueGetter: countBy((v) => v != null),
             valueFormatter: (count) => count > 0 ? `RESTRICTED: ${count}` : null,
             tooltip: true,
             tooltipConfig: {
@@ -844,8 +869,8 @@ export class OverviewWidget extends BaseWidget {
         }, FLAGS);
 
         pill('count', {
-            id: 'pill_contains_default', columns: 'isInDefault',
-            equals: (v) => +v === 1, min: 1, type: 'error',
+            id: 'pill_contains_default', columns: 'isInDefault', type: 'error',
+            valueGetter: countBy((v) => +v === 1),
             valueFormatter: (count) => count ? 'Contains Default' : null,
             tooltip: true,
             tooltipConfig: {
@@ -859,8 +884,8 @@ export class OverviewWidget extends BaseWidget {
         }, FLAGS);
 
         pill('count', {
-            id: 'pill_contains_new_issue', columns: 'isNewIssue',
-            equals: (v) => +v === 1, min: 1, type: 'warning',
+            id: 'pill_contains_new_issue', columns: 'isNewIssue', type: 'warning',
+            valueGetter: countBy((v) => +v === 1),
             valueFormatter: (count) => count ? 'Contains New Issue' : null,
             tooltip: true,
             tooltipConfig: {
@@ -874,8 +899,8 @@ export class OverviewWidget extends BaseWidget {
         }, FLAGS);
 
         pill('count', {
-            id: 'pill_contains_muni', columns: 'isMuni',
-            equals: (v) => +v === 1, min: 1, type: 'warning',
+            id: 'pill_contains_muni', columns: 'isMuni', type: 'warning',
+            valueGetter: countBy((v) => +v === 1),
             valueFormatter: (count) => count ? 'Contains Muni' : null,
             tooltip: true,
             tooltipConfig: {
@@ -898,6 +923,7 @@ export class OverviewWidget extends BaseWidget {
 
         pill('distinct', {
             id: 'currency', columns: 'currency', type: 'warning',
+            condition: (val) => val != null && (val.distinct > 1 || !val.seenValues.includes('USD')),
             valueFormatter: (val) => {
                 if (val.distinct > 1) return `Multi Currency: ${Array.from(val.seenValues).toSorted().join(', ')}`;
                 if (!val.seenValues.includes('USD')) return `Non-USD: ${Array.from(val.seenValues).toSorted().join(', ')}`;
@@ -915,52 +941,85 @@ export class OverviewWidget extends BaseWidget {
             valueFormatter: (v) => v > 0 ? `Removed bonds: ${v | 0}` : null,
         }, FLAGS);
 
-        pill('count', {
-            id: 'pill_rfq_bmk_mismatch', columns: 'isRfqBenchmarkMismatch',
-            equals: (v) => +v === 1, min: 1, type: 'error',
+        pill('custom', {
+            id: 'pill_rfq_bmk_mismatch', columns: ['rfqBenchmarkIsin', 'benchmarkIsin'], type: 'error',
+            valueGetter: async (data) => {
+                const left = data?.rfqBenchmarkIsin || [];
+                const right = data?.benchmarkIsin || [];
+                let count = 0;
+                for (let i = 0; i < Math.max(left.length, right.length); i++) {
+                    const lm = left[i] == null || String(left[i]).trim() === '';
+                    const rm = right[i] == null || String(right[i]).trim() === '';
+                    if (lm && rm) continue;
+                    if (left[i] !== right[i]) count++;
+                }
+                return count > 0 ? count : null;
+            },
             valueFormatter: (count) => count ? 'RFQ Benchmark Mismatch' : null,
             tooltip: true,
             tooltipConfig: {
                 content: () => {
                     const eng = pills.engine;
                     if (!eng) return '';
-                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'isRfqBenchmarkMismatch', (v) => +v === 1)));
+                    return tooltipFromLines(buildLines(eng, maskByMismatch(eng, 'rfqBenchmarkIsin', 'benchmarkIsin')));
                 },
             },
-            modal: (_e, p) => mkModal('RFQ Benchmark Mismatch', (eng) => maskByPredicate(eng, 'isRfqBenchmarkMismatch', (v) => +v === 1), 'error')(p),
+            modal: (_e, p) => mkModal('RFQ Benchmark Mismatch', (eng) => maskByMismatch(eng, 'rfqBenchmarkIsin', 'benchmarkIsin'), 'error')(p),
         }, FLAGS);
 
-        pill('count', {
-            id: 'pill_bval_mismatch', columns: 'isBvalBenchmarkMismatch',
-            equals: (v) => v === 1, min: 1, type: 'error',
+        pill('custom', {
+            id: 'pill_bval_mismatch', columns: ['bvalBenchmarkIsin', 'benchmarkIsin'], type: 'error',
+            valueGetter: async (data) => {
+                const left = data?.bvalBenchmarkIsin || [];
+                const right = data?.benchmarkIsin || [];
+                let count = 0;
+                for (let i = 0; i < Math.max(left.length, right.length); i++) {
+                    const lm = left[i] == null || String(left[i]).trim() === '';
+                    const rm = right[i] == null || String(right[i]).trim() === '';
+                    if (lm && rm) continue;
+                    if (left[i] !== right[i]) count++;
+                }
+                return count > 0 ? count : null;
+            },
             valueFormatter: (count) => count > 0 ? `BVAL Mismatch: ${count}` : null,
             tooltip: true,
             tooltipConfig: {
                 content: () => {
                     const eng = pills.engine;
                     if (!eng) return '';
-                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'isBvalBenchmarkMismatch', (v) => v === 1), ['description']));
+                    return tooltipFromLines(buildLines(eng, maskByMismatch(eng, 'bvalBenchmarkIsin', 'benchmarkIsin'), ['description']));
                 },
             },
-            modal: (_e, p) => mkModal('BVAL Benchmark Mismatch', (eng) => maskByPredicate(eng, 'isBvalBenchmarkMismatch', (v) => v === 1), 'info', {
+            modal: (_e, p) => mkModal('BVAL Benchmark Mismatch', (eng) => maskByMismatch(eng, 'bvalBenchmarkIsin', 'benchmarkIsin'), 'info', {
                 isin: 'ISIN', description: 'Description', bvalBenchmarkTenor: 'BVAL BM', bvalBenchmarkIsin: 'BVAL ISIN',
                 benchmarkName: 'PT BM', benchmarkIsin: 'PT Bench ISIN', bvalBenchYldDiff: 'Approx. BPS Diff',
             }, 'Note: [approx bps diff] = ( [live yld of BVAL tenor] - [live yld of PT tenor] ) * 100', ['benchmarkName', 'description'])(p),
         }, FLAGS);
 
-        pill('count', {
-            id: 'pill_macp_mismatch', columns: 'isMacpBenchmarkMismatch',
-            equals: (v) => v === 1, min: 1, type: 'error',
+        pill('custom', {
+            id: 'pill_macp_mismatch', columns: ['macpBenchmarkIsin', 'benchmarkIsin'], type: 'error',
+            valueGetter: async (data) => {
+                const left = data?.macpBenchmarkIsin || [];
+                const right = data?.benchmarkIsin || [];
+                let count = 0;
+                for (let i = 0; i < Math.max(left.length, right.length); i++) {
+                    const lm = left[i] == null || String(left[i]).trim() === '';
+                    const rm = right[i] == null || String(right[i]).trim() === '';
+                    if (lm && rm) continue;
+                    if (left[i] !== right[i]) count++;
+                }
+                return count > 0 ? count : null;
+            },
             valueFormatter: (count) => count > 0 ? `CP+ Mismatch: ${count}` : null,
             tooltip: true,
             tooltipConfig: {
                 content: () => {
                     const eng = pills.engine;
                     if (!eng) return '';
-                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'isMacpBenchmarkMismatch', (v) => v === 1), ['description']));
+                    return tooltipFromLines(buildLines(eng, maskByMismatch(eng, 'macpBenchmarkIsin', 'benchmarkIsin'), ['description']));
                 },
             },
-            modal: (_e, p) => mkModal('CP+ Benchmark Mismatch', (eng) => maskByPredicate(eng, 'isMacpBenchmarkMismatch', (v) => v === 1), 'info', {
+            modal: (_e, p) => mkModal('CP+ Benchmark Mismatch', (eng) => maskByMismatch(eng, 'macpBenchmarkIsin', 'benchmarkIsin'), 'info', {
                 isin: 'ISIN', description: 'Description', macpBenchmarkTenor: 'CP+ BM', macpBenchmarkIsin: 'CP+ ISIN',
                 benchmarkName: 'PT BM', benchmarkIsin: 'PT Bench ISIN',
             }, null, ['benchmarkName', 'description'])(p),
@@ -969,8 +1028,8 @@ export class OverviewWidget extends BaseWidget {
         // ────── Size / Settlement ──────
 
         pill('count', {
-            id: 'pill_blocks_over_10m', columns: 'grossSize',
-            equals: (v) => Math.abs(+v || 0) > 10_000_000, min: 1, type: 'warning',
+            id: 'pill_blocks_over_10m', columns: 'grossSize', type: 'warning',
+            valueGetter: countBy((v) => Math.abs(+v || 0) > 10_000_000),
             valueFormatter: (count) => count ? `Blocks: ${count}` : null,
             tooltip: true,
             tooltipConfig: {
@@ -984,8 +1043,8 @@ export class OverviewWidget extends BaseWidget {
         }, FLAGS);
 
         pill('count', {
-            id: 'pill_stub', columns: 'isStub',
-            equals: (v) => v === 1, min: 1, type: 'warning',
+            id: 'pill_stub', columns: 'isStub', type: 'warning',
+            valueGetter: countBy((v) => v === 1),
             valueFormatter: (count) => count > 0 ? `Stub Sizes: ${count}` : null,
             tooltip: true,
             tooltipConfig: {
@@ -999,8 +1058,8 @@ export class OverviewWidget extends BaseWidget {
         }, FLAGS);
 
         pill('count', {
-            id: 'pill_non_standard_settle', columns: 'daysToSettle',
-            equals: (v) => (+v || 0) > 2, min: 1, type: 'warning',
+            id: 'pill_non_standard_settle', columns: 'daysToSettle', type: 'warning',
+            valueGetter: countBy((v) => (+v || 0) > 2),
             valueFormatter: (count) => count ? `Non-Standard Settle: ${count}` : null,
             tooltip: true,
             tooltipConfig: {
@@ -1018,10 +1077,11 @@ export class OverviewWidget extends BaseWidget {
         pill('custom', {
             id: 'pill_claimed_bonds_sum', columns: ['claimed'], type: 'portfolio',
             valueGetter: async (data) => {
+                const arr = Array.isArray(data) ? data : Object.values(data || {})[0] || [];
                 let sum = 0; let any = false;
-                const mask = new Array((data || []).length);
-                for (let i = 0; i < (data || []).length; i++) {
-                    const v = data[i];
+                const mask = new Array(arr.length);
+                for (let i = 0; i < arr.length; i++) {
+                    const v = arr[i];
                     const n = (v == null || v === '') ? 0 : (v ? 1 : 0);
                     if (n > 0) { any = true; sum += n; mask[i] = true; } else mask[i] = false;
                 }
@@ -1033,29 +1093,15 @@ export class OverviewWidget extends BaseWidget {
                 content: () => {
                     const eng = pills.engine;
                     if (!eng) return '';
-                    const claimed = eng.getColumnValues(['claimed']);
-                    if (!claimed) return '';
-                    const n = claimed.length;
-                    const mask = new Uint8Array(n);
-                    for (let i = 0; i < n; i++) {
-                        const v = claimed[i];
-                        if (v != null && v !== '' && v) mask[i] = 1;
-                    }
-                    return tooltipFromLines(buildLines(eng, mask));
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'claimed', (v) => v != null && v !== '' && v)));
                 },
             },
             modal: (_e, p) => {
                 const eng = p.mgr.engine;
                 if (!eng) return;
-                const claimed = eng.getColumnValues(['claimed']);
-                if (!claimed) return;
-                const n = claimed.length;
-                const mask = new Uint8Array(n);
+                const mask = maskByPredicate(eng, 'claimed', (v) => v != null && v !== '' && v);
                 let sum = 0;
-                for (let i = 0; i < n; i++) {
-                    const v = claimed[i];
-                    if (v != null && v !== '' && v) { mask[i] = 1; sum++; }
-                }
+                for (let i = 0; i < mask.length; i++) if (mask[i]) sum++;
                 const lines = buildLines(eng, mask);
                 const payload = modalPayload(`Claimed Bonds: ${sum}`, lines, ['description', 'isin'], 'portfolio');
                 p.mgr.createInfoModal(payload.title, payload.content, payload.type);
