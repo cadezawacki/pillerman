@@ -75,7 +75,7 @@ function maskByPredicate(engine, col, pred) {
 
 /**
  * Given an engine and two column names, return a boolean mask
- * of which rows have mismatched values (skipping rows where both are missing).
+ * of which rows have mismatched values (skipping rows where either is null/empty).
  */
 function maskByMismatch(engine, colA, colB) {
     const n = engine.numRows() | 0;
@@ -84,9 +84,8 @@ function maskByMismatch(engine, colA, colB) {
     const mask = new Uint8Array(n);
     for (let i = 0; i < n; i++) {
         const a = getA(i), b = getB(i);
-        const aMissing = a == null || String(a).trim() === '';
-        const bMissing = b == null || String(b).trim() === '';
-        if (aMissing && bMissing) continue;
+        if (a == null || String(a).trim() === '') continue;
+        if (b == null || String(b).trim() === '') continue;
         if (a !== b) mask[i] = 1;
     }
     return mask;
@@ -948,9 +947,8 @@ export class OverviewWidget extends BaseWidget {
                 const right = data?.benchmarkIsin || [];
                 let count = 0;
                 for (let i = 0; i < Math.max(left.length, right.length); i++) {
-                    const lm = left[i] == null || String(left[i]).trim() === '';
-                    const rm = right[i] == null || String(right[i]).trim() === '';
-                    if (lm && rm) continue;
+                    if (left[i] == null || String(left[i]).trim() === '') continue;
+                    if (right[i] == null || String(right[i]).trim() === '') continue;
                     if (left[i] !== right[i]) count++;
                 }
                 return count > 0 ? count : null;
@@ -974,9 +972,8 @@ export class OverviewWidget extends BaseWidget {
                 const right = data?.benchmarkIsin || [];
                 let count = 0;
                 for (let i = 0; i < Math.max(left.length, right.length); i++) {
-                    const lm = left[i] == null || String(left[i]).trim() === '';
-                    const rm = right[i] == null || String(right[i]).trim() === '';
-                    if (lm && rm) continue;
+                    if (left[i] == null || String(left[i]).trim() === '') continue;
+                    if (right[i] == null || String(right[i]).trim() === '') continue;
                     if (left[i] !== right[i]) count++;
                 }
                 return count > 0 ? count : null;
@@ -1003,9 +1000,8 @@ export class OverviewWidget extends BaseWidget {
                 const right = data?.benchmarkIsin || [];
                 let count = 0;
                 for (let i = 0; i < Math.max(left.length, right.length); i++) {
-                    const lm = left[i] == null || String(left[i]).trim() === '';
-                    const rm = right[i] == null || String(right[i]).trim() === '';
-                    if (lm && rm) continue;
+                    if (left[i] == null || String(left[i]).trim() === '') continue;
+                    if (right[i] == null || String(right[i]).trim() === '') continue;
                     if (left[i] !== right[i]) count++;
                 }
                 return count > 0 ? count : null;
