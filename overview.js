@@ -740,6 +740,327 @@ export class OverviewWidget extends BaseWidget {
                 },
             }, DETAILS);
         }
+
+        /* ═══════ FLAG PILLS (warnings / errors — mounted to FLAGS) ═══════ */
+
+        // ────── Missing Data ──────
+
+        pill('count', {
+            id: 'pill_missing_descriptions', columns: 'description',
+            equals: (v) => v == null || String(v).trim() === '', min: 1, type: 'error',
+            valueFormatter: (count) => count > 0 ? `Missing Descriptions: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'description', (v) => v == null || String(v).trim() === '')));
+                },
+            },
+            modal: (_e, p) => mkModal('Missing Descriptions', (eng) => maskByPredicate(eng, 'description', (v) => v == null || String(v).trim() === ''))(p),
+        }, FLAGS);
+
+        pill('count', {
+            id: 'pill_missing_dv01', columns: 'grossDv01',
+            equals: (v) => v == null, min: 1, type: 'error',
+            valueFormatter: (count) => count > 0 ? `Missing DV01: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'grossDv01', (v) => v == null)));
+                },
+            },
+            modal: (_e, p) => mkModal('Missing DV01', (eng) => maskByPredicate(eng, 'grossDv01', (v) => v == null), 'info', ['description', 'isin', 'grossSize'])(p),
+        }, FLAGS);
+
+        pill('count', {
+            id: 'pill_missing_desig', columns: 'desigName',
+            equals: (v) => v == null || String(v).trim() === '', min: 1, type: 'error',
+            valueFormatter: (count) => count > 0 ? `Missing Desig: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'desigName', (v) => v == null || String(v).trim() === ''), ['description']));
+                },
+            },
+            modal: (_e, p) => mkModal('Missing Desig', (eng) => maskByPredicate(eng, 'desigName', (v) => v == null || String(v).trim() === ''))(p),
+        }, FLAGS);
+
+        pill('count', {
+            id: 'pill_missing_assigned', columns: 'assignedTrader',
+            equals: (v) => v == null || String(v).trim() === '', min: 1, type: 'error',
+            valueFormatter: (count) => count > 0 ? `Unassigned: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'assignedTrader', (v) => v == null || String(v).trim() === ''), ['description']));
+                },
+            },
+            modal: (_e, p) => mkModal('Unassigned Bonds', (eng) => maskByPredicate(eng, 'assignedTrader', (v) => v == null || String(v).trim() === ''))(p),
+        }, FLAGS);
+
+        // ────── Trade Flags ──────
+
+        pill('count', {
+            id: 'pill_dnt_count', columns: 'isDnt',
+            equals: (v) => coerceToBool(v), min: 1, type: 'error',
+            valueFormatter: (count) => count > 0 ? `DNT Bonds: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'isDnt', (v) => coerceToBool(v)), ['description']));
+                },
+            },
+            modal: (_e, p) => mkModal('DNT Bonds', (eng) => maskByPredicate(eng, 'isDnt', (v) => coerceToBool(v)), 'info', {
+                isin: 'ISIN', description: 'Description', userSide: 'Side', grossSize: 'Size',
+                desigName: 'Desig', assignedTrader: 'Assigned', dntComment: 'DNT', dntEventEnd: 'End Time', dntModifiedBy: 'Modified By',
+            })(p),
+        }, FLAGS);
+
+        pill('count', {
+            id: 'pill_restrictedCode_count', columns: 'restrictedCode',
+            equals: (v) => v != null, min: 1, type: 'error',
+            valueFormatter: (count) => count > 0 ? `RESTRICTED: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'restrictedCode', (v) => v != null), ['description']));
+                },
+            },
+            modal: (_e, p) => mkModal('Restricted Bonds', (eng) => maskByPredicate(eng, 'restrictedCode', (v) => v != null), 'info', {
+                isin: 'ISIN', description: 'Description', userSide: 'Side', grossSize: 'Size',
+                desigName: 'Desig', assignedTrader: 'Assigned', restrictedCode: 'Code', restrictionTier: 'Tier', restrictionTime: 'Time',
+            })(p),
+        }, FLAGS);
+
+        pill('count', {
+            id: 'pill_contains_default', columns: 'isInDefault',
+            equals: (v) => +v === 1, min: 1, type: 'error',
+            valueFormatter: (count) => count ? 'Contains Default' : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'isInDefault', (v) => +v === 1)));
+                },
+            },
+            modal: (_e, p) => mkModal('Contains Default', (eng) => maskByPredicate(eng, 'isInDefault', (v) => +v === 1))(p),
+        }, FLAGS);
+
+        pill('count', {
+            id: 'pill_contains_new_issue', columns: 'isNewIssue',
+            equals: (v) => +v === 1, min: 1, type: 'warning',
+            valueFormatter: (count) => count ? 'Contains New Issue' : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'isNewIssue', (v) => +v === 1)));
+                },
+            },
+            modal: (_e, p) => mkModal('Contains New Issue', (eng) => maskByPredicate(eng, 'isNewIssue', (v) => +v === 1), 'info', ['description', 'isin', 'issueDate', 'isWhenIssued', 'announcementDate'])(p),
+        }, FLAGS);
+
+        pill('count', {
+            id: 'pill_contains_muni', columns: 'isMuni',
+            equals: (v) => +v === 1, min: 1, type: 'warning',
+            valueFormatter: (count) => count ? 'Contains Muni' : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'isMuni', (v) => +v === 1)));
+                },
+            },
+            modal: (_e, p) => mkModal('Contains Muni', (eng) => maskByPredicate(eng, 'isMuni', (v) => +v === 1))(p),
+        }, FLAGS);
+
+        // ────── Market / Benchmark ──────
+
+        pill('notDistinct', {
+            id: 'quoteType', columns: 'quoteType', type: 'warning', label: 'Multi QT:',
+            valueFormatter: (val) => Array.from(val?.seenValues || []).toSorted().join(', '),
+            nullPolicy: 'hide',
+        }, FLAGS);
+
+        pill('distinct', {
+            id: 'currency', columns: 'currency', type: 'warning',
+            valueFormatter: (val) => {
+                if (val.distinct > 1) return `Multi Currency: ${Array.from(val.seenValues).toSorted().join(', ')}`;
+                if (!val.seenValues.includes('USD')) return `Non-USD: ${Array.from(val.seenValues).toSorted().join(', ')}`;
+                return null;
+            },
+        }, FLAGS);
+
+        pill('meta', {
+            id: 'isCrossed', columns: 'isCrossed', type: 'warning',
+            valueFormatter: (v) => v ? 'TSY CROSSED' : null,
+        }, FLAGS);
+
+        pill('meta', {
+            id: 'removedCount', columns: 'removedCount', type: 'warning',
+            valueFormatter: (v) => v > 0 ? `Removed bonds: ${v | 0}` : null,
+        }, FLAGS);
+
+        pill('count', {
+            id: 'pill_rfq_bmk_mismatch', columns: 'isRfqBenchmarkMismatch',
+            equals: (v) => +v === 1, min: 1, type: 'error',
+            valueFormatter: (count) => count ? 'RFQ Benchmark Mismatch' : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'isRfqBenchmarkMismatch', (v) => +v === 1)));
+                },
+            },
+            modal: (_e, p) => mkModal('RFQ Benchmark Mismatch', (eng) => maskByPredicate(eng, 'isRfqBenchmarkMismatch', (v) => +v === 1), 'error')(p),
+        }, FLAGS);
+
+        pill('count', {
+            id: 'pill_bval_mismatch', columns: 'isBvalBenchmarkMismatch',
+            equals: (v) => v === 1, min: 1, type: 'error',
+            valueFormatter: (count) => count > 0 ? `BVAL Mismatch: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'isBvalBenchmarkMismatch', (v) => v === 1), ['description']));
+                },
+            },
+            modal: (_e, p) => mkModal('BVAL Benchmark Mismatch', (eng) => maskByPredicate(eng, 'isBvalBenchmarkMismatch', (v) => v === 1), 'info', {
+                isin: 'ISIN', description: 'Description', bvalBenchmarkTenor: 'BVAL BM', bvalBenchmarkIsin: 'BVAL ISIN',
+                benchmarkName: 'PT BM', benchmarkIsin: 'PT Bench ISIN', bvalBenchYldDiff: 'Approx. BPS Diff',
+            }, 'Note: [approx bps diff] = ( [live yld of BVAL tenor] - [live yld of PT tenor] ) * 100', ['benchmarkName', 'description'])(p),
+        }, FLAGS);
+
+        pill('count', {
+            id: 'pill_macp_mismatch', columns: 'isMacpBenchmarkMismatch',
+            equals: (v) => v === 1, min: 1, type: 'error',
+            valueFormatter: (count) => count > 0 ? `CP+ Mismatch: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'isMacpBenchmarkMismatch', (v) => v === 1), ['description']));
+                },
+            },
+            modal: (_e, p) => mkModal('CP+ Benchmark Mismatch', (eng) => maskByPredicate(eng, 'isMacpBenchmarkMismatch', (v) => v === 1), 'info', {
+                isin: 'ISIN', description: 'Description', macpBenchmarkTenor: 'CP+ BM', macpBenchmarkIsin: 'CP+ ISIN',
+                benchmarkName: 'PT BM', benchmarkIsin: 'PT Bench ISIN',
+            }, null, ['benchmarkName', 'description'])(p),
+        }, FLAGS);
+
+        // ────── Size / Settlement ──────
+
+        pill('count', {
+            id: 'pill_blocks_over_10m', columns: 'grossSize',
+            equals: (v) => Math.abs(+v || 0) > 10_000_000, min: 1, type: 'warning',
+            valueFormatter: (count) => count ? `Blocks: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'grossSize', (v) => Math.abs(+v || 0) > 10_000_000)));
+                },
+            },
+            modal: (_e, p) => mkModal('Blocks > 10mm', (eng) => maskByPredicate(eng, 'grossSize', (v) => Math.abs(+v || 0) > 10_000_000), 'info', ['description', 'isin', 'userSide', 'grossSize'])(p),
+        }, FLAGS);
+
+        pill('count', {
+            id: 'pill_stub', columns: 'isStub',
+            equals: (v) => v === 1, min: 1, type: 'warning',
+            valueFormatter: (count) => count > 0 ? `Stub Sizes: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'isStub', (v) => v === 1), ['description']));
+                },
+            },
+            modal: (_e, p) => mkModal('Stub Sizes', (eng) => maskByPredicate(eng, 'isStub', (v) => v === 1), 'info', ['isin', 'description', 'grossSize'])(p),
+        }, FLAGS);
+
+        pill('count', {
+            id: 'pill_non_standard_settle', columns: 'daysToSettle',
+            equals: (v) => (+v || 0) > 2, min: 1, type: 'warning',
+            valueFormatter: (count) => count ? `Non-Standard Settle: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'daysToSettle', (v) => (+v || 0) > 2), ['description', 'daysToSettle']));
+                },
+            },
+            modal: (_e, p) => mkModal('Non-Standard Settle', (eng) => maskByPredicate(eng, 'daysToSettle', (v) => (+v || 0) > 2), 'info', ['description', 'isin', 'daysToSettle', 'isNewIssue'])(p),
+        }, FLAGS);
+
+        // ────── Claimed ──────
+
+        pill('custom', {
+            id: 'pill_claimed_bonds_sum', columns: ['claimed'], type: 'portfolio',
+            valueGetter: async (data) => {
+                let sum = 0; let any = false;
+                const mask = new Array((data || []).length);
+                for (let i = 0; i < (data || []).length; i++) {
+                    const v = data[i];
+                    const n = (v == null || v === '') ? 0 : (v ? 1 : 0);
+                    if (n > 0) { any = true; sum += n; mask[i] = true; } else mask[i] = false;
+                }
+                return any ? { sum, mask } : null;
+            },
+            valueFormatter: (obj) => obj ? `Claimed Bonds: ${Math.round(obj.sum)}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    const claimed = eng.getColumnValues(['claimed']);
+                    if (!claimed) return '';
+                    const n = claimed.length;
+                    const mask = new Uint8Array(n);
+                    for (let i = 0; i < n; i++) {
+                        const v = claimed[i];
+                        if (v != null && v !== '' && v) mask[i] = 1;
+                    }
+                    return tooltipFromLines(buildLines(eng, mask));
+                },
+            },
+            modal: (_e, p) => {
+                const eng = p.mgr.engine;
+                if (!eng) return;
+                const claimed = eng.getColumnValues(['claimed']);
+                if (!claimed) return;
+                const n = claimed.length;
+                const mask = new Uint8Array(n);
+                let sum = 0;
+                for (let i = 0; i < n; i++) {
+                    const v = claimed[i];
+                    if (v != null && v !== '' && v) { mask[i] = 1; sum++; }
+                }
+                const lines = buildLines(eng, mask);
+                const payload = modalPayload(`Claimed Bonds: ${sum}`, lines, ['description', 'isin'], 'portfolio');
+                p.mgr.createInfoModal(payload.title, payload.content, payload.type);
+            },
+        }, FLAGS);
     }
 
     /* ════════════════════════════════════════════════════════════════════════
