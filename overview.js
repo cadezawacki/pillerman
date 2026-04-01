@@ -40,7 +40,7 @@ const REQUIRED_COLUMNS = Object.freeze([
     'QT',
     // Distribution bar dropdown options (categorical)
     'deskAsset', 'regionCountry', 'desigName', 'maturityBucket',
-    'ratingCombined', 'ratingMnemonic', 'industrySector',
+    'ratingCombined', 'ratingMnemonic', 'ratingAssetClass', 'industrySector',
     // Pill flags
     'description', 'isin', 'currency', 'isPriced', 'claimed',
     'isMuni', 'isNewIssue', 'isInDefault', 'isDnt', 'restrictedCode',
@@ -369,6 +369,122 @@ function maturityBucket(y) {
 }
 
 function hhiClass(v) { return v == null ? null : (v > 0.7 ? 'Highly Concentrated' : (v < 0.2 ? 'Diversified' : null)); }
+
+/* ─────────── Quality concentration helpers ─────────── */
+
+const QUALITY_CONC_THRESHOLD = 0.75;  // asset-class must be >75% of gross
+const MNEMONIC_CONC_THRESHOLD = 0.50; // mnemonic must be >50% for finer label
+
+/** Map ratingMnemonic values (GRADE or QUALITY naming) to display labels */
+const MNEMONIC_DISPLAY = Object.freeze({
+    'PRIME': 'Prime',
+    'IG_HIGH_GRADE': 'High-Quality', 'IG_HIGH_QUALITY': 'High-Quality',
+    'IG_MEDIUM_GRADE': 'Mid-Quality', 'IG_MEDIUM_QUALITY': 'Mid-Quality',
+    'IG_LOW_GRADE': 'Low-Quality', 'IG_LOW_QUALITY': 'Low-Quality',
+    'HY_UPPER_GRADE': 'Upper-HY', 'HY_UPPER_QUALITY': 'Upper-HY',
+    'HY_LOWER_GRADE': 'Lower-HY', 'HY_LOWER_QUALITY': 'Lower-HY',
+    'JUNK_UPPER_GRADE': 'Junk', 'JUNK_UPPER_QUALITY': 'Junk',
+    'JUNK_MEDIUM_GRADE': 'Junk', 'JUNK_MEDIUM_QUALITY': 'Junk',
+    'JUNK_LOW_GRADE': 'Deep Junk', 'JUNK_LOW_QUALITY': 'Deep Junk',
+    'JUNK_GRADE': 'Junk', 'JUNK_QUALITY': 'Junk', 'JUNK': 'Junk',
+    'IN_DEFAULT': 'Defaulted',
+});
+
+/** Map an S&P rating string to its asset class (IG / HY / JUNK). */
+const RATING_TO_CLASS = Object.freeze({
+    'AAA': 'IG', 'AA+': 'IG', 'AA': 'IG', 'AA-': 'IG',
+    'A+': 'IG', 'A': 'IG', 'A-': 'IG',
+    'BBB+': 'IG', 'BBB': 'IG', 'BBB-': 'IG',
+    'BB+': 'HY', 'BB': 'HY', 'BB-': 'HY',
+    'B+': 'HY', 'B': 'HY', 'B-': 'HY',
+    'CCC+': 'JUNK', 'CCC': 'JUNK', 'CCC-': 'JUNK',
+    'CC': 'JUNK', 'C': 'JUNK',
+    'D': 'JUNK',
+});
+
+/** Map an S&P rating string to a display-quality label. */
+const RATING_TO_MNEMONIC = Object.freeze({
+    'AAA': 'PRIME',
+    'AA+': 'IG_HIGH_QUALITY', 'AA': 'IG_HIGH_QUALITY', 'AA-': 'IG_HIGH_QUALITY',
+    'A+': 'IG_MEDIUM_QUALITY', 'A': 'IG_MEDIUM_QUALITY', 'A-': 'IG_MEDIUM_QUALITY',
+    'BBB+': 'IG_LOW_QUALITY', 'BBB': 'IG_LOW_QUALITY', 'BBB-': 'IG_LOW_QUALITY',
+    'BB+': 'HY_UPPER_QUALITY', 'BB': 'HY_UPPER_QUALITY', 'BB-': 'HY_UPPER_QUALITY',
+    'B+': 'HY_LOWER_QUALITY', 'B': 'HY_LOWER_QUALITY', 'B-': 'HY_LOWER_QUALITY',
+    'CCC+': 'JUNK', 'CCC': 'JUNK', 'CCC-': 'JUNK',
+    'CC': 'JUNK', 'C': 'JUNK',
+    'D': 'IN_DEFAULT',
+});
+
+/**
+ * Analyze quality concentration across engine rows.
+ * Returns a concise label ("Low-Quality", "HY", etc.) or null if mixed.
+ */
+function _qualityConcentration(eng) {
+    const n = eng.numRows() | 0;
+    if (n === 0) return null;
+
+    const getClass = eng._getValueGetter('ratingAssetClass');
+    const getMnem = eng._getValueGetter('ratingMnemonic');
+    const getSize = eng._getValueGetter('grossSize');
+
+    const classTotals = {};
+    const mnemTotals = {};
+    let total = 0;
+
+    for (let i = 0; i < n; i++) {
+        const sz = Math.abs(+(getSize(i)) || 0);
+        const cls = getClass(i);
+        if (_isNullish(cls)) continue;
+        const c = String(cls).trim().toUpperCase();
+        classTotals[c] = (classTotals[c] || 0) + sz;
+
+        const m = getMnem(i);
+        if (!_isNullish(m)) {
+            const mk = String(m).trim();
+            mnemTotals[mk] = (mnemTotals[mk] || 0) + sz;
+        }
+        total += sz;
+    }
+
+    if (total === 0) return null;
+
+    // Find dominant asset class
+    let domClass = null, domPct = 0;
+    for (const [cls, amt] of Object.entries(classTotals)) {
+        const pct = amt / total;
+        if (pct > domPct) { domPct = pct; domClass = cls; }
+    }
+
+    if (domPct < QUALITY_CONC_THRESHOLD) return null; // mixed IG/HY — no label
+
+    // Within dominant class, find the dominant mnemonic for a finer label
+    const classRe = domClass === 'IG' ? /^(PRIME|IG_)/
+        : domClass === 'HY' ? /^HY_/
+        : /^(JUNK|IN_DEFAULT)/;
+
+    let domMnem = null, domMnemAmt = 0;
+    for (const [mnem, amt] of Object.entries(mnemTotals)) {
+        if (!classRe.test(mnem)) continue;
+        if (amt > domMnemAmt) { domMnemAmt = amt; domMnem = mnem; }
+    }
+
+    if (domMnem && domMnemAmt / total > MNEMONIC_CONC_THRESHOLD) {
+        return MNEMONIC_DISPLAY[domMnem] || domClass;
+    }
+
+    return domClass; // "IG", "HY", or "JUNK"
+}
+
+/**
+ * Derive a quality label from a single S&P rating string (metaStore value).
+ * Returns a display label or null.
+ */
+function _ratingToQualityLabel(rating) {
+    if (_isNullish(rating)) return null;
+    const r = String(rating).trim().toUpperCase();
+    const mnem = RATING_TO_MNEMONIC[r];
+    return mnem ? (MNEMONIC_DISPLAY[mnem] || RATING_TO_CLASS[r] || null) : null;
+}
 
 /* ═══════════════════════════════════════════════════════════════════════════
    OVERVIEW WIDGET
@@ -718,8 +834,20 @@ export class OverviewWidget extends BaseWidget {
                 const side = m.get('rfqSide');
                 if (side !== 'BWIC' && side !== 'BOWIC') return null;
                 let y = m.get('bwicYrsToMaturity') ?? m.get('yrsToMaturity');
-                const b = maturityBucket(y);
-                return b ? `Client Selling: ${b}` : null;
+                const bucket = maturityBucket(y);
+
+                // Quality concentration — for BOWIC use metaStore per-side rating,
+                // for pure BWIC use engine-wide analysis (all bonds are sell-side)
+                let quality = null;
+                if (side === 'BOWIC') {
+                    quality = _ratingToQualityLabel(m.get('bwicCreditRating'));
+                } else {
+                    const eng = p.mgr.engine;
+                    if (eng) quality = _qualityConcentration(eng);
+                }
+
+                const parts = [quality, bucket].filter(Boolean);
+                return parts.length ? `Client Selling: ${parts.join(' ')}` : null;
             },
         }, DETAILS);
 
@@ -730,8 +858,18 @@ export class OverviewWidget extends BaseWidget {
                 const side = m.get('rfqSide');
                 if (side !== 'OWIC' && side !== 'BOWIC') return null;
                 let y = m.get('owicYrsToMaturity') ?? m.get('yrsToMaturity');
-                const b = maturityBucket(y);
-                return b ? `Client Buying: ${b}` : null;
+                const bucket = maturityBucket(y);
+
+                let quality = null;
+                if (side === 'BOWIC') {
+                    quality = _ratingToQualityLabel(m.get('owicCreditRating'));
+                } else {
+                    const eng = p.mgr.engine;
+                    if (eng) quality = _qualityConcentration(eng);
+                }
+
+                const parts = [quality, bucket].filter(Boolean);
+                return parts.length ? `Client Buying: ${parts.join(' ')}` : null;
             },
         }, DETAILS);
 
