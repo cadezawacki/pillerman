@@ -80,7 +80,7 @@ function maskByPredicate(engine, col, pred) {
  */
 function _isMissingBenchmark(v) {
     if (v == null) return true;                   // null | undefined
-    if (v === 0 || v === false) return true;      // falsy non-string
+    if (v === 0 || v === 0n || v === false) return true; // falsy non-string (incl BigInt)
     const s = String(v).trim().toLowerCase();
     return s === '' || s === 'null' || s === 'undefined' || s === 'n/a';
 }
@@ -894,7 +894,12 @@ export class OverviewWidget extends BaseWidget {
             })(p),
         }, FLAGS);
 
-        const _isNotReal = (v) => v == null || v === false || +v === 0 || String(v).trim().toLowerCase() === 'false';
+        const _isNotReal = (v) => {
+            if (v == null || v === false) return true;
+            if (typeof v === 'bigint') return v === 0n;
+            const s = String(v).trim().toLowerCase();
+            return s === '0' || s === 'false';
+        };
 
         pill('count', {
             id: 'pill_removed_bonds', columns: 'isReal', type: 'warning',
