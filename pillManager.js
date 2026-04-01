@@ -1,4 +1,5 @@
 
+import {writeObjectToClipboard} from "@/utils/clipboardHelpers.js";
 
 export const TYPE_TO_COLOR = Object.freeze({
     client: 'blue',
@@ -546,12 +547,14 @@ export default class PillManager {
         return '';
     }
 
-    createInfoModal(title, content, type = "info", subtitle=null, classList=null) {
+    createInfoModal(title, content, type = "info", subtitle=null, classList=null, options={}) {
+        const enableCopy = options.copyToClipboard !== false;
+
         const modal = document.createElement('dialog');
         modal.className = 'modal';
         modal.innerHTML = `
             <div class="modal-box pt-info-box">
-                <div class="modal-header-wrapper">
+                <div class="modal-header-wrapper" style="position:relative">
                     ${this.getModalIcon(type)}
                     <h3 class="font-bold">${title || 'Information'}</h3>
                 </div>
@@ -571,10 +574,53 @@ export default class PillManager {
             })
         }
         document.body.appendChild(modal);
-        const close_el = modal.querySelector('.modal-closer');
 
         const absig = new AbortController();
         const signal = absig.signal;
+
+        // ── Copy-to-clipboard button ──
+        if (enableCopy) {
+            const table = modal.querySelector('.modal-body-wrapper table');
+            if (table) {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.title = 'Copy to clipboard';
+                btn.style.cssText = 'position:absolute;top:0;right:0;background:none;border:1px solid var(--border-color,#ccc);border-radius:6px;padding:4px 6px;cursor:pointer;display:inline-flex;align-items:center;gap:4px;font-size:12px;color:inherit;opacity:0.7;transition:opacity 0.15s,border-color 0.15s';
+                btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Copy</span>`;
+                btn.addEventListener('mouseenter', () => { btn.style.opacity = '1'; });
+                btn.addEventListener('mouseleave', () => { if (!btn.dataset.copied) btn.style.opacity = '0.7'; });
+
+                btn.addEventListener('click', async () => {
+                    try {
+                        const rows = [];
+                        for (const tr of table.rows) {
+                            const cells = [];
+                            for (const td of tr.cells) cells.push(td.textContent);
+                            rows.push(cells);
+                        }
+                        await writeObjectToClipboard(rows, { headers: false });
+
+                        btn.dataset.copied = '1';
+                        btn.style.opacity = '1';
+                        btn.style.borderColor = 'var(--success-color,#22c55e)';
+                        btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--success-color,#22c55e)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><span style="color:var(--success-color,#22c55e)">Copied</span>`;
+
+                        setTimeout(() => {
+                            delete btn.dataset.copied;
+                            btn.style.opacity = '0.7';
+                            btn.style.borderColor = '';
+                            btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Copy</span>`;
+                        }, 2000);
+                    } catch (e) {
+                        console.error('Clipboard write failed:', e);
+                    }
+                }, { signal });
+
+                modal.querySelector('.modal-header-wrapper').appendChild(btn);
+            }
+        }
+
+        const close_el = modal.querySelector('.modal-closer');
 
         this.context.page.addEventListener(close_el, 'click', () => {
             modal.close();
