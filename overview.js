@@ -53,9 +53,10 @@ const REQUIRED_COLUMNS = Object.freeze([
     'bvalMidPx', 'bvalMidSpd', 'bvalMidYld', 'bvalMidDm', 'bvalMidMmy',
     'macpMidPx', 'macpMidSpd', 'macpMidYld', 'macpMidDm', 'macpMidMmy',
     'cbbtMidPx', 'cbbtMidSpd', 'cbbtMidYld', 'cbbtMidDm', 'cbbtMidMmy',
-    'houseMidPx', 'houseMidSpd', 'houseMidYld', 'houseMidDm', 'houseMidMmy',
     'usMarkMidPx', 'usMarkMidSpd', 'usMarkMidYld', 'usMarkMidDm', 'usMarkMidMmy',
-    'amMidPx', 'amMidSpd', 'amMidYld', 'amMidDm', 'amMidMmy', 'isFloater', 'isHybrid', 'isPerpetual'
+    'amMidPx', 'amMidSpd', 'amMidYld', 'amMidDm', 'amMidMmy',
+    // Floater / perpetual / hybrid flags (gate AM in ref variance)
+    'isFloater', 'isPerpetual', 'isHybrid',
 ]);
 
 const SORT_ORDERS = Object.freeze({
@@ -1675,28 +1676,34 @@ export class OverviewWidget extends BaseWidget {
 
         // ────── Reference Market Mid Variance ──────
 
-        const REF_MARKETS = ['bval', 'macp', 'cbbt', 'am'];
+        const REF_MARKETS_BASE = ['bval', 'macp', 'cbbt'];
+        const REF_MARKETS_ALL = ['bval', 'macp', 'cbbt', 'am'];
         const QT_TO_SUFFIX = { PX: 'Px', SPD: 'Spd', YLD: 'Yld', DM: 'Dm', MMY: 'Mmy' };
         const REF_VAR_PCT = 0.10;    // 10% divergence threshold
         const REF_VAR_ABS = 0.5;     // absolute range guard
         const REF_VAR_EPS = 0.01;    // near-zero mean epsilon
 
-        const allRefMidCols = REF_MARKETS.flatMap(m =>
+        const allRefMidCols = REF_MARKETS_ALL.flatMap(m =>
             Object.values(QT_TO_SUFFIX).map(s => `${m}Mid${s}`)
         );
 
-        function _getRefMids(data, i, suffix) {
+        /** true when bond is floater, perpetual, or hybrid → include AM */
+        function _isAmEligible(data, i) {
+            const fl = data?.isFloater;
+            const pp = data?.isPerpetual;
+            const hy = data?.isHybrid;
+            return coerceToBool(fl?.[i]) || coerceToBool(pp?.[i]) || coerceToBool(hy?.[i]);
+        }
+
+        function _isAmEligibleEng(eng, i) {
+            return coerceToBool(eng._getValueGetter('isFloater')(i))
+                || coerceToBool(eng._getValueGetter('isPerpetual')(i))
+                || coerceToBool(eng._getValueGetter('isHybrid')(i));
+        }
+
+        function _getRefMids(data, i, suffix, markets) {
             const vals = [];
-            for (const mkt of REF_MARKETS) {
-
-                if ((mkt === 'am') && !(
-                    (data['isFloater'] === 1) ||
-                    (data['isHybrid'] === 1) ||
-                    (data['isPerpetual'] === 1)
-                )) {
-                    continue
-                }
-
+            for (const mkt of markets) {
                 const col = `${mkt}Mid${suffix}`;
                 const arr = data[col];
                 if (!arr) continue;
@@ -1726,13 +1733,14 @@ export class OverviewWidget extends BaseWidget {
         function _normalizeQt(raw) {
             if (_isNullish(raw)) return null;
             const s = String(raw).trim().toUpperCase();
-            // Handle long-form keys from QT_MAP (e.g. 'price' → 'PX')
             const mapped = QT_MAP[s.toLowerCase()];
             return mapped || s;
         }
 
         pill('custom', {
-            id: 'pill_ref_market_variance', columns: ['QT', ...allRefMidCols], type: 'warning',
+            id: 'pill_ref_market_variance',
+            columns: ['QT', 'isFloater', 'isPerpetual', 'isHybrid', ...allRefMidCols],
+            type: 'warning',
             valueGetter: async (data) => {
                 const qtArr = data?.QT || [];
                 let count = 0;
@@ -1741,7 +1749,8 @@ export class OverviewWidget extends BaseWidget {
                     if (!qt) continue;
                     const suffix = QT_TO_SUFFIX[qt];
                     if (!suffix) continue;
-                    const mids = _getRefMids(data, i, suffix);
+                    const markets = _isAmEligible(data, i) ? REF_MARKETS_ALL : REF_MARKETS_BASE;
+                    const mids = _getRefMids(data, i, suffix, markets);
                     if (_hasHighRefVariance(mids)) count++;
                 }
                 return count > 0 ? count : null;
@@ -1761,8 +1770,10 @@ export class OverviewWidget extends BaseWidget {
                         if (!qt) continue;
                         const suffix = QT_TO_SUFFIX[qt];
                         if (!suffix) continue;
+                        const useAm = _isAmEligibleEng(eng, i);
+                        const markets = useAm ? REF_MARKETS_ALL : REF_MARKETS_BASE;
                         const mids = [];
-                        for (const mkt of REF_MARKETS) {
+                        for (const mkt of markets) {
                             const v = eng._getValueGetter(`${mkt}Mid${suffix}`)(i);
                             if (!_isNullish(v) && Number.isFinite(+v)) mids.push({ mkt, val: +v });
                         }
@@ -1787,14 +1798,20 @@ export class OverviewWidget extends BaseWidget {
                 const getDesc = eng._getValueGetter('description');
                 const getIsin = eng._getValueGetter('isin');
 
+                const headers = ['Description', 'ISIN', 'QT', 'BVAL', 'MACP', 'CBBT', 'AM'];
+                const mktKeys = ['bval', 'macp', 'cbbt', 'am'];
+
+                const rowData = [];
                 for (let i = 0; i < n; i++) {
                     const qt = _normalizeQt(getQt(i));
                     if (!qt) continue;
                     const suffix = QT_TO_SUFFIX[qt];
                     if (!suffix) continue;
+                    const useAm = _isAmEligibleEng(eng, i);
+                    const markets = useAm ? REF_MARKETS_ALL : REF_MARKETS_BASE;
                     const mids = [];
                     const vals = {};
-                    for (const mkt of REF_MARKETS) {
+                    for (const mkt of markets) {
                         const v = eng._getValueGetter(`${mkt}Mid${suffix}`)(i);
                         if (!_isNullish(v) && Number.isFinite(+v)) {
                             mids.push({ mkt, val: +v });
@@ -1816,6 +1833,7 @@ export class OverviewWidget extends BaseWidget {
                             ...mktKeys.map(k => vals[k] != null ? String(vals[k]) : ''),
                         ],
                         outlierMkt,
+                        useAm,
                     });
                 }
 
@@ -1833,14 +1851,17 @@ export class OverviewWidget extends BaseWidget {
                 table.appendChild(thead);
 
                 const tbody = document.createElement('tbody');
-                for (const { cells, outlierMkt } of rows) {
+                for (const { cells, outlierMkt, useAm } of rowData) {
                     const tr = document.createElement('tr');
                     for (let c = 0; c < cells.length; c++) {
                         const td = document.createElement('td');
                         td.textContent = cells[c];
-                        // Columns 3-6 map to mktKeys[0-3]
+                        // Columns 3-6 map to mktKeys[0-3]; only highlight AM (idx 3) when eligible
                         if (c >= 3 && mktKeys[c - 3] === outlierMkt) {
-                            td.classList.add('ref-mkt-outlier');
+                            if (mktKeys[c - 3] !== 'am' || useAm) {
+                                td.style.color = '#e05252';
+                                td.style.fontWeight = '600';
+                            }
                         }
                         tr.appendChild(td);
                     }
