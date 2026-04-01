@@ -54,6 +54,8 @@ const REQUIRED_COLUMNS = Object.freeze([
     'macpMidPx', 'macpMidSpd', 'macpMidYld', 'macpMidDm', 'macpMidMmy',
     'cbbtMidPx', 'cbbtMidSpd', 'cbbtMidYld', 'cbbtMidDm', 'cbbtMidMmy',
     'houseMidPx', 'houseMidSpd', 'houseMidYld', 'houseMidDm', 'houseMidMmy',
+    'usMarkMidPx', 'usMarkMidSpd', 'usMarkMidYld', 'usMarkMidDm', 'usMarkMidMmy',
+    'amMidPx', 'amMidSpd', 'amMidYld', 'amMidDm', 'amMidMmy', 'isFloater', 'isHybrid', 'isPerpetual'
 ]);
 
 const SORT_ORDERS = Object.freeze({
@@ -836,6 +838,8 @@ export class OverviewWidget extends BaseWidget {
                 let y = m.get('bwicYrsToMaturity') ?? m.get('yrsToMaturity');
                 const bucket = maturityBucket(y);
 
+                // Quality concentration — for BOWIC use metaStore per-side rating,
+                // for pure BWIC use engine-wide analysis (all bonds are sell-side)
                 let quality = null;
                 if (side === 'BOWIC') {
                     // Suppress quality when both sides resolve to the same label
@@ -1671,7 +1675,7 @@ export class OverviewWidget extends BaseWidget {
 
         // ────── Reference Market Mid Variance ──────
 
-        const REF_MARKETS = ['bval', 'macp', 'cbbt', 'house'];
+        const REF_MARKETS = ['bval', 'macp', 'cbbt', 'am'];
         const QT_TO_SUFFIX = { PX: 'Px', SPD: 'Spd', YLD: 'Yld', DM: 'Dm', MMY: 'Mmy' };
         const REF_VAR_PCT = 0.10;    // 10% divergence threshold
         const REF_VAR_ABS = 0.5;     // absolute range guard
@@ -1684,6 +1688,15 @@ export class OverviewWidget extends BaseWidget {
         function _getRefMids(data, i, suffix) {
             const vals = [];
             for (const mkt of REF_MARKETS) {
+
+                if ((mkt === 'am') && !(
+                    (data['isFloater'] === 1) ||
+                    (data['isHybrid'] === 1) ||
+                    (data['isPerpetual'] === 1)
+                )) {
+                    continue
+                }
+
                 const col = `${mkt}Mid${suffix}`;
                 const arr = data[col];
                 if (!arr) continue;
@@ -1754,8 +1767,8 @@ export class OverviewWidget extends BaseWidget {
                             if (!_isNullish(v) && Number.isFinite(+v)) mids.push({ mkt, val: +v });
                         }
                         if (_hasHighRefVariance(mids)) {
-                            const parts = mids.map(m => `${m.mkt.toUpperCase()}=${m.val}`).join(', ');
-                            lines.push(`${getDesc(i) || '?'} — ${parts}`);
+                            const parts = mids.map(m => `${m.mkt.toUpperCase()}=${(m.val).toFixed(2)}`).join(', ');
+                            lines.push(`${getDesc(i) || '?'} - ${parts}`);
                         }
                     }
                     return lines.join('\n') || '';
@@ -1766,14 +1779,14 @@ export class OverviewWidget extends BaseWidget {
                 if (!eng) return;
                 const n = eng.numRows() | 0;
                 const getQt = eng._getValueGetter('QT');
+
+                // Build rows with per-bond QT-driven columns
+                const headers = ['Description', 'ISIN', 'QT', 'BVAL', 'MACP', 'CBBT', 'AM'];
+                const mktKeys = ['bval', 'macp', 'cbbt', 'am'];
+                const rows = [];
                 const getDesc = eng._getValueGetter('description');
                 const getIsin = eng._getValueGetter('isin');
 
-                const headers = ['Description', 'ISIN', 'QT', 'BVAL', 'MACP', 'CBBT', 'House'];
-                const mktKeys = ['bval', 'macp', 'cbbt', 'house'];
-
-                // Collect rows with outlier index per row
-                const rowData = [];
                 for (let i = 0; i < n; i++) {
                     const qt = _normalizeQt(getQt(i));
                     if (!qt) continue;
@@ -1785,11 +1798,10 @@ export class OverviewWidget extends BaseWidget {
                         const v = eng._getValueGetter(`${mkt}Mid${suffix}`)(i);
                         if (!_isNullish(v) && Number.isFinite(+v)) {
                             mids.push({ mkt, val: +v });
-                            vals[mkt] = +v;
+                            vals[mkt] = (+v).toFixed(3);
                         }
                     }
                     if (!_hasHighRefVariance(mids)) continue;
-
                     // Identify outlier: market furthest from mean
                     const mean = mids.reduce((s, m) => s + m.val, 0) / mids.length;
                     let outlierMkt = null, maxDev = 0;
@@ -1798,7 +1810,7 @@ export class OverviewWidget extends BaseWidget {
                         if (dev > maxDev) { maxDev = dev; outlierMkt = mkt; }
                     }
 
-                    rowData.push({
+                    rows.push({
                         cells: [
                             String(getDesc(i) ?? ''), String(getIsin(i) ?? ''), qt,
                             ...mktKeys.map(k => vals[k] != null ? String(vals[k]) : ''),
@@ -1821,15 +1833,14 @@ export class OverviewWidget extends BaseWidget {
                 table.appendChild(thead);
 
                 const tbody = document.createElement('tbody');
-                for (const { cells, outlierMkt } of rowData) {
+                for (const { cells, outlierMkt } of rows) {
                     const tr = document.createElement('tr');
                     for (let c = 0; c < cells.length; c++) {
                         const td = document.createElement('td');
                         td.textContent = cells[c];
                         // Columns 3-6 map to mktKeys[0-3]
                         if (c >= 3 && mktKeys[c - 3] === outlierMkt) {
-                            td.style.color = '#e05252';
-                            td.style.fontWeight = '600';
+                            td.classList.add('ref-mkt-outlier');
                         }
                         tr.appendChild(td);
                     }
@@ -1837,7 +1848,7 @@ export class OverviewWidget extends BaseWidget {
                 }
                 table.appendChild(tbody);
 
-                const sub = rowData.length > 0 ? `${rowData.length} bond${rowData.length > 1 ? 's' : ''}` : null;
+                const sub = rows.length > 0 ? `${rows.length} bond${rows.length > 1 ? 's' : ''}` : null;
                 const html = table.outerHTML;
                 p.mgr.createInfoModal('Ref Market Variance', html, 'warning', sub);
             },
