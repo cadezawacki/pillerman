@@ -678,7 +678,7 @@ export class OverviewWidget extends BaseWidget {
         }, DETAILS);
 
         pill('custom', {
-            id: 'liquidityBasket', type: 'portfolio',
+            id: 'liquidityBasket', columns: 'liqScoreCombined', source: 'store', type: 'portfolio',
             valueGetter: async (_data, p) => p.mgr.context.page._metaStore?.get('liqScoreCombined') ?? null,
             valueFormatter: (score) => {
                 if (score == null) return null;
