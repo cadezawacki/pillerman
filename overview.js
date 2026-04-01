@@ -690,7 +690,7 @@ export class OverviewWidget extends BaseWidget {
         }, DETAILS);
 
         pill('custom', {
-            id: 'clientSellingBucket', type: 'portfolio',
+            id: 'clientSellingBucket', columns: 'rfqSide', source: 'store', type: 'portfolio',
             valueGetter: async (_data, p) => {
                 const m = p.mgr.context.page._metaStore; if (!m) return null;
                 const side = m.get('rfqSide');
@@ -702,7 +702,7 @@ export class OverviewWidget extends BaseWidget {
         }, DETAILS);
 
         pill('custom', {
-            id: 'clientBuyingBucket', type: 'portfolio',
+            id: 'clientBuyingBucket', columns: 'rfqSide', source: 'store', type: 'portfolio',
             valueGetter: async (_data, p) => {
                 const m = p.mgr.context.page._metaStore; if (!m) return null;
                 const side = m.get('rfqSide');
