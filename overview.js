@@ -894,6 +894,23 @@ export class OverviewWidget extends BaseWidget {
             })(p),
         }, FLAGS);
 
+        const _isNotReal = (v) => v == null || v === false || +v === 0 || String(v).trim().toLowerCase() === 'false';
+
+        pill('count', {
+            id: 'pill_removed_bonds', columns: 'isReal', type: 'warning',
+            valueGetter: countBy(_isNotReal),
+            valueFormatter: (count) => count > 0 ? `Removed: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'isReal', _isNotReal), ['description']));
+                },
+            },
+            modal: (_e, p) => mkModal('Removed Bonds', (eng) => maskByPredicate(eng, 'isReal', _isNotReal), 'warning', ['description', 'isin', 'userSide', 'grossSize'])(p),
+        }, FLAGS);
+
         pill('count', {
             id: 'pill_contains_default', columns: 'isInDefault', type: 'error',
             valueGetter: countBy((v) => +v === 1),
