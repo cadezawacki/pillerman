@@ -47,6 +47,13 @@ const REQUIRED_COLUMNS = Object.freeze([
     'daysToSettle', 'isRfqBenchmarkMismatch', 'isBvalBenchmarkMismatch',
     'isMacpBenchmarkMismatch', 'isStub', 'assignedTrader', 'grossSize',
     'isReal', 'quoteType',
+    // Amount outstanding / issued
+    'amountOutstanding', 'amountIssued',
+    // Reference market mid columns (all QT variants × 4 markets)
+    'bvalMidPx', 'bvalMidSpd', 'bvalMidYld', 'bvalMidDm', 'bvalMidMmy',
+    'macpMidPx', 'macpMidSpd', 'macpMidYld', 'macpMidDm', 'macpMidMmy',
+    'cbbtMidPx', 'cbbtMidSpd', 'cbbtMidYld', 'cbbtMidDm', 'cbbtMidMmy',
+    'houseMidPx', 'houseMidSpd', 'houseMidYld', 'houseMidDm', 'houseMidMmy',
 ]);
 
 const SORT_ORDERS = Object.freeze({
@@ -1456,6 +1463,206 @@ export class OverviewWidget extends BaseWidget {
                     const d = new Date(v);
                     return !isNaN(d.getTime()) && d.getTime() < now;
                 }), 'error', ['description', 'isin', 'maturityDate', 'grossSize'])(p);
+            },
+        }, FLAGS);
+
+        // ────── Low Amount Outstanding / Issued Ratio ──────
+
+        const OUTSTANDING_THRESHOLD = 0.25;
+
+        pill('custom', {
+            id: 'pill_low_outstanding_ratio', columns: ['amountOutstanding', 'amountIssued'], type: 'warning',
+            valueGetter: async (data) => {
+                const outstanding = data?.amountOutstanding || [];
+                const issued = data?.amountIssued || [];
+                let count = 0;
+                for (let i = 0; i < outstanding.length; i++) {
+                    if (_isNullish(outstanding[i]) || _isNullish(issued[i])) continue;
+                    const o = +outstanding[i], iss = +issued[i];
+                    if (!Number.isFinite(o) || !Number.isFinite(iss) || iss <= 0) continue;
+                    if (o / iss < OUTSTANDING_THRESHOLD) count++;
+                }
+                return count > 0 ? count : null;
+            },
+            valueFormatter: (count) => count ? `Low Amt Outstanding: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    const getO = eng._getValueGetter('amountOutstanding');
+                    const getI = eng._getValueGetter('amountIssued');
+                    const n = eng.numRows() | 0;
+                    const lines = [];
+                    for (let i = 0; i < n && lines.length < 8; i++) {
+                        const o = getO(i), iss = getI(i);
+                        if (_isNullish(o) || _isNullish(iss)) continue;
+                        const on = +o, isn = +iss;
+                        if (!Number.isFinite(on) || !Number.isFinite(isn) || isn <= 0) continue;
+                        if (on / isn < OUTSTANDING_THRESHOLD) {
+                            const desc = eng._getValueGetter('description')(i);
+                            lines.push(`${desc || '?'} — ${Math.round(on / isn * 100)}%`);
+                        }
+                    }
+                    return lines.join('\n') || '';
+                },
+            },
+            modal: (_e, p) => {
+                const eng = p.mgr.engine;
+                if (!eng) return;
+                const n = eng.numRows() | 0;
+                const mask = new Uint8Array(n);
+                const getO = eng._getValueGetter('amountOutstanding');
+                const getI = eng._getValueGetter('amountIssued');
+                for (let i = 0; i < n; i++) {
+                    const o = getO(i), iss = getI(i);
+                    if (_isNullish(o) || _isNullish(iss)) continue;
+                    const on = +o, isn = +iss;
+                    if (!Number.isFinite(on) || !Number.isFinite(isn) || isn <= 0) continue;
+                    if (on / isn < OUTSTANDING_THRESHOLD) mask[i] = 1;
+                }
+                mkModal('Low Amount Outstanding', () => mask, 'warning', {
+                    description: 'Description', isin: 'ISIN',
+                    amountOutstanding: 'Amt Outstanding', amountIssued: 'Amt Issued',
+                })(p);
+            },
+        }, FLAGS);
+
+        // ────── Reference Market Mid Variance ──────
+
+        const REF_MARKETS = ['bval', 'macp', 'cbbt', 'house'];
+        const QT_TO_SUFFIX = { PX: 'Px', SPD: 'Spd', YLD: 'Yld', DM: 'Dm', MMY: 'Mmy' };
+        const REF_VAR_PCT = 0.10;    // 10% divergence threshold
+        const REF_VAR_ABS = 0.5;     // absolute range guard
+        const REF_VAR_EPS = 0.01;    // near-zero mean epsilon
+
+        const allRefMidCols = REF_MARKETS.flatMap(m =>
+            Object.values(QT_TO_SUFFIX).map(s => `${m}Mid${s}`)
+        );
+
+        function _getRefMids(data, i, suffix) {
+            const vals = [];
+            for (const mkt of REF_MARKETS) {
+                const col = `${mkt}Mid${suffix}`;
+                const arr = data[col];
+                if (!arr) continue;
+                const v = arr[i];
+                if (_isNullish(v)) continue;
+                const n = +v;
+                if (Number.isFinite(n)) vals.push({ mkt, val: n });
+            }
+            return vals;
+        }
+
+        function _hasHighRefVariance(mids) {
+            if (mids.length < 2) return false;
+            let min = Infinity, max = -Infinity, sum = 0;
+            for (const { val } of mids) {
+                if (val < min) min = val;
+                if (val > max) max = val;
+                sum += val;
+            }
+            const range = max - min;
+            if (range < REF_VAR_ABS) return false;
+            const mean = sum / mids.length;
+            if (Math.abs(mean) < REF_VAR_EPS) return true; // near-zero mean + material range
+            return range / Math.abs(mean) > REF_VAR_PCT;
+        }
+
+        function _normalizeQt(raw) {
+            if (_isNullish(raw)) return null;
+            const s = String(raw).trim().toUpperCase();
+            // Handle long-form keys from QT_MAP (e.g. 'price' → 'PX')
+            const mapped = QT_MAP[s.toLowerCase()];
+            return mapped || s;
+        }
+
+        pill('custom', {
+            id: 'pill_ref_market_variance', columns: ['QT', ...allRefMidCols], type: 'warning',
+            valueGetter: async (data) => {
+                const qtArr = data?.QT || [];
+                let count = 0;
+                for (let i = 0; i < qtArr.length; i++) {
+                    const qt = _normalizeQt(qtArr[i]);
+                    if (!qt) continue;
+                    const suffix = QT_TO_SUFFIX[qt];
+                    if (!suffix) continue;
+                    const mids = _getRefMids(data, i, suffix);
+                    if (_hasHighRefVariance(mids)) count++;
+                }
+                return count > 0 ? count : null;
+            },
+            valueFormatter: (count) => count ? `Ref Market Variance: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    const n = eng.numRows() | 0;
+                    const getQt = eng._getValueGetter('QT');
+                    const getDesc = eng._getValueGetter('description');
+                    const lines = [];
+                    for (let i = 0; i < n && lines.length < 8; i++) {
+                        const qt = _normalizeQt(getQt(i));
+                        if (!qt) continue;
+                        const suffix = QT_TO_SUFFIX[qt];
+                        if (!suffix) continue;
+                        const mids = [];
+                        for (const mkt of REF_MARKETS) {
+                            const v = eng._getValueGetter(`${mkt}Mid${suffix}`)(i);
+                            if (!_isNullish(v) && Number.isFinite(+v)) mids.push({ mkt, val: +v });
+                        }
+                        if (_hasHighRefVariance(mids)) {
+                            const parts = mids.map(m => `${m.mkt.toUpperCase()}=${m.val}`).join(', ');
+                            lines.push(`${getDesc(i) || '?'} — ${parts}`);
+                        }
+                    }
+                    return lines.join('\n') || '';
+                },
+            },
+            modal: (_e, p) => {
+                const eng = p.mgr.engine;
+                if (!eng) return;
+                const n = eng.numRows() | 0;
+                const getQt = eng._getValueGetter('QT');
+
+                // Build rows with per-bond QT-driven columns
+                const headers = ['Description', 'ISIN', 'QT', 'BVAL', 'MACP', 'CBBT', 'House'];
+                const rows = [];
+                const getDesc = eng._getValueGetter('description');
+                const getIsin = eng._getValueGetter('isin');
+
+                for (let i = 0; i < n; i++) {
+                    const qt = _normalizeQt(getQt(i));
+                    if (!qt) continue;
+                    const suffix = QT_TO_SUFFIX[qt];
+                    if (!suffix) continue;
+                    const mids = [];
+                    const vals = {};
+                    for (const mkt of REF_MARKETS) {
+                        const v = eng._getValueGetter(`${mkt}Mid${suffix}`)(i);
+                        if (!_isNullish(v) && Number.isFinite(+v)) {
+                            mids.push({ mkt, val: +v });
+                            vals[mkt] = +v;
+                        }
+                    }
+                    if (!_hasHighRefVariance(mids)) continue;
+                    rows.push([
+                        String(getDesc(i) ?? ''),
+                        String(getIsin(i) ?? ''),
+                        qt,
+                        vals.bval != null ? String(vals.bval) : '',
+                        vals.macp != null ? String(vals.macp) : '',
+                        vals.cbbt != null ? String(vals.cbbt) : '',
+                        vals.house != null ? String(vals.house) : '',
+                    ]);
+                }
+
+                const tableData = [headers, ...rows];
+                const table = buildTable(tableData);
+                const sub = rows.length > 0 ? `${rows.length} bond${rows.length > 1 ? 's' : ''}` : null;
+                const html = table ? table.outerHTML : '<p>No matching rows.</p>';
+                p.mgr.createInfoModal('Ref Market Variance', html, 'warning', sub);
             },
         }, FLAGS);
     }
