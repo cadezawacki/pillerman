@@ -378,9 +378,9 @@ const MNEMONIC_CONC_THRESHOLD = 0.50; // mnemonic must be >50% for finer label
 /** Map ratingMnemonic values (GRADE or QUALITY naming) to display labels */
 const MNEMONIC_DISPLAY = Object.freeze({
     'PRIME': 'Prime',
-    'IG_HIGH_GRADE': 'High-Quality', 'IG_HIGH_QUALITY': 'High-Quality',
-    'IG_MEDIUM_GRADE': 'Mid-Quality', 'IG_MEDIUM_QUALITY': 'Mid-Quality',
-    'IG_LOW_GRADE': 'Low-Quality', 'IG_LOW_QUALITY': 'Low-Quality',
+    'IG_HIGH_GRADE': 'HQ', 'IG_HIGH_QUALITY': 'HQ',
+    'IG_MEDIUM_GRADE': 'MQ', 'IG_MEDIUM_QUALITY': 'MQ',
+    'IG_LOW_GRADE': 'LQ', 'IG_LOW_QUALITY': 'LQ',
     'HY_UPPER_GRADE': 'Upper-HY', 'HY_UPPER_QUALITY': 'Upper-HY',
     'HY_LOWER_GRADE': 'Lower-HY', 'HY_LOWER_QUALITY': 'Lower-HY',
     'JUNK_UPPER_GRADE': 'Junk', 'JUNK_UPPER_QUALITY': 'Junk',
@@ -836,11 +836,12 @@ export class OverviewWidget extends BaseWidget {
                 let y = m.get('bwicYrsToMaturity') ?? m.get('yrsToMaturity');
                 const bucket = maturityBucket(y);
 
-                // Quality concentration — for BOWIC use metaStore per-side rating,
-                // for pure BWIC use engine-wide analysis (all bonds are sell-side)
                 let quality = null;
                 if (side === 'BOWIC') {
-                    quality = _ratingToQualityLabel(m.get('bwicCreditRating'));
+                    // Suppress quality when both sides resolve to the same label
+                    const sq = _ratingToQualityLabel(m.get('bwicCreditRating'));
+                    const bq = _ratingToQualityLabel(m.get('owicCreditRating'));
+                    if (sq && sq !== bq) quality = sq;
                 } else {
                     const eng = p.mgr.engine;
                     if (eng) quality = _qualityConcentration(eng);
@@ -862,7 +863,9 @@ export class OverviewWidget extends BaseWidget {
 
                 let quality = null;
                 if (side === 'BOWIC') {
-                    quality = _ratingToQualityLabel(m.get('owicCreditRating'));
+                    const bq = _ratingToQualityLabel(m.get('owicCreditRating'));
+                    const sq = _ratingToQualityLabel(m.get('bwicCreditRating'));
+                    if (bq && bq !== sq) quality = bq;
                 } else {
                     const eng = p.mgr.engine;
                     if (eng) quality = _qualityConcentration(eng);
