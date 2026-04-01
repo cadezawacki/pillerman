@@ -86,6 +86,21 @@ function _isMissingBenchmark(v) {
 }
 
 /**
+ * General-purpose "is this value absent?" check.
+ * Catches null, undefined, empty/whitespace strings, and the literal
+ * strings "null", "undefined", "N/A".  Does NOT reject 0 or false
+ * so numeric fields with legitimate zeroes are preserved.
+ */
+function _isNullish(v) {
+    if (v == null) return true;
+    if (typeof v === 'string') {
+        const s = v.trim().toLowerCase();
+        return s === '' || s === 'null' || s === 'undefined' || s === 'n/a';
+    }
+    return false;
+}
+
+/**
  * Given an engine and two column names, return a boolean mask
  * of which rows have mismatched values.
  * A row is skipped (never flagged) when either side is missing.
@@ -1123,8 +1138,8 @@ export class OverviewWidget extends BaseWidget {
                 const weights = new Map();
                 let total = 0;
                 for (let i = 0; i < tickers.length; i++) {
-                    const t = tickers[i];
-                    if (t == null || String(t).trim() === '') continue;
+                    if (_isNullish(tickers[i])) continue;
+                    const t = String(tickers[i]).trim();
                     const s = Math.abs(+sizes[i] || 0);
                     total += s;
                     weights.set(t, (weights.get(t) || 0) + s);
@@ -1149,8 +1164,8 @@ export class OverviewWidget extends BaseWidget {
                     const weights = new Map();
                     let total = 0;
                     for (let i = 0; i < n; i++) {
-                        const t = getTicker(i);
-                        if (t == null || String(t).trim() === '') continue;
+                        if (_isNullish(getTicker(i))) continue;
+                        const t = String(getTicker(i)).trim();
                         const s = Math.abs(+getSize(i) || 0);
                         total += s;
                         weights.set(t, (weights.get(t) || 0) + s);
@@ -1173,8 +1188,8 @@ export class OverviewWidget extends BaseWidget {
                 const weights = new Map();
                 let total = 0;
                 for (let i = 0; i < n; i++) {
-                    const t = getTicker(i);
-                    if (t == null || String(t).trim() === '') continue;
+                    if (_isNullish(getTicker(i))) continue;
+                    const t = String(getTicker(i)).trim();
                     const s = Math.abs(+getSize(i) || 0);
                     total += s;
                     weights.set(t, (weights.get(t) || 0) + s);
@@ -1182,7 +1197,10 @@ export class OverviewWidget extends BaseWidget {
                 const concentrated = new Set();
                 for (const [t, w] of weights) { if (w / total > 0.25) concentrated.add(t); }
                 const mask = new Uint8Array(n);
-                for (let i = 0; i < n; i++) { if (concentrated.has(getTicker(i))) mask[i] = 1; }
+                for (let i = 0; i < n; i++) {
+                    const tv = getTicker(i);
+                    if (!_isNullish(tv) && concentrated.has(String(tv).trim())) mask[i] = 1;
+                }
                 mkModal('Single-Name Concentration', () => mask, 'warning', {
                     ticker: 'Ticker', description: 'Description', isin: 'ISIN', grossSize: 'Size',
                 })(p);
@@ -1197,8 +1215,8 @@ export class OverviewWidget extends BaseWidget {
                 const weights = new Map();
                 let total = 0;
                 for (let i = 0; i < sectors.length; i++) {
-                    const s = sectors[i];
-                    if (s == null || String(s).trim() === '') continue;
+                    if (_isNullish(sectors[i])) continue;
+                    const s = String(sectors[i]).trim();
                     const sz = Math.abs(+sizes[i] || 0);
                     total += sz;
                     weights.set(s, (weights.get(s) || 0) + sz);
@@ -1223,8 +1241,8 @@ export class OverviewWidget extends BaseWidget {
                     const weights = new Map();
                     let total = 0;
                     for (let i = 0; i < n; i++) {
-                        const s = getSector(i);
-                        if (s == null || String(s).trim() === '') continue;
+                        if (_isNullish(getSector(i))) continue;
+                        const s = String(getSector(i)).trim();
                         const sz = Math.abs(+getSize(i) || 0);
                         total += sz;
                         weights.set(s, (weights.get(s) || 0) + sz);
@@ -1247,8 +1265,8 @@ export class OverviewWidget extends BaseWidget {
                 const weights = new Map();
                 let total = 0;
                 for (let i = 0; i < n; i++) {
-                    const s = getSector(i);
-                    if (s == null || String(s).trim() === '') continue;
+                    if (_isNullish(getSector(i))) continue;
+                    const s = String(getSector(i)).trim();
                     const sz = Math.abs(+getSize(i) || 0);
                     total += sz;
                     weights.set(s, (weights.get(s) || 0) + sz);
@@ -1256,7 +1274,10 @@ export class OverviewWidget extends BaseWidget {
                 const concentrated = new Set();
                 for (const [s, w] of weights) { if (w / total > 0.4) concentrated.add(s); }
                 const mask = new Uint8Array(n);
-                for (let i = 0; i < n; i++) { if (concentrated.has(getSector(i))) mask[i] = 1; }
+                for (let i = 0; i < n; i++) {
+                    const sv = getSector(i);
+                    if (!_isNullish(sv) && concentrated.has(String(sv).trim())) mask[i] = 1;
+                }
                 mkModal('Sector Concentration', () => mask, 'warning', {
                     issuerIndustrySector: 'Sector', issuerIndustry: 'Industry', description: 'Description', grossSize: 'Size',
                 })(p);
@@ -1272,6 +1293,7 @@ export class OverviewWidget extends BaseWidget {
                 const lqa = data?.lqaLiqScore || [];
                 let count = 0;
                 for (let i = 0; i < Math.max(macp.length, lqa.length); i++) {
+                    if (_isNullish(macp[i]) || _isNullish(lqa[i])) continue;
                     const m = +macp[i], l = +lqa[i] / 100;
                     if (!Number.isFinite(m) || !Number.isFinite(l)) continue;
                     if (Math.abs(m - l) > 2) count++;
@@ -1289,6 +1311,7 @@ export class OverviewWidget extends BaseWidget {
                     const getL = eng._getValueGetter('lqaLiqScore');
                     const mask = new Uint8Array(n);
                     for (let i = 0; i < n; i++) {
+                        if (_isNullish(getM(i)) || _isNullish(getL(i))) continue;
                         const m = +getM(i), l = +getL(i) / 100;
                         if (!Number.isFinite(m) || !Number.isFinite(l)) continue;
                         if (Math.abs(m - l) > 2) mask[i] = 1;
@@ -1304,6 +1327,7 @@ export class OverviewWidget extends BaseWidget {
                 const getL = eng._getValueGetter('lqaLiqScore');
                 const mask = new Uint8Array(n);
                 for (let i = 0; i < n; i++) {
+                    if (_isNullish(getM(i)) || _isNullish(getL(i))) continue;
                     const m = +getM(i), l = +getL(i) / 100;
                     if (!Number.isFinite(m) || !Number.isFinite(l)) continue;
                     if (Math.abs(m - l) > 2) mask[i] = 1;
@@ -1322,7 +1346,7 @@ export class OverviewWidget extends BaseWidget {
                 const arr = Array.isArray(data) ? data : Object.values(data || {})[0] || [];
                 const counts = new Map();
                 for (const v of arr) {
-                    if (v == null || String(v).trim() === '') continue;
+                    if (_isNullish(v)) continue;
                     const k = String(v).trim();
                     counts.set(k, (counts.get(k) || 0) + 1);
                 }
@@ -1341,13 +1365,14 @@ export class OverviewWidget extends BaseWidget {
                     const counts = new Map();
                     for (let i = 0; i < n; i++) {
                         const v = getter(i);
-                        if (v == null || String(v).trim() === '') continue;
-                        counts.set(String(v).trim(), (counts.get(String(v).trim()) || 0) + 1);
+                        if (_isNullish(v)) continue;
+                        const k = String(v).trim();
+                        counts.set(k, (counts.get(k) || 0) + 1);
                     }
                     const mask = new Uint8Array(n);
                     for (let i = 0; i < n; i++) {
                         const v = getter(i);
-                        if (v != null && counts.get(String(v).trim()) > 1) mask[i] = 1;
+                        if (!_isNullish(v) && counts.get(String(v).trim()) > 1) mask[i] = 1;
                     }
                     return tooltipFromLines(buildLines(eng, mask));
                 },
@@ -1360,13 +1385,14 @@ export class OverviewWidget extends BaseWidget {
                 const counts = new Map();
                 for (let i = 0; i < n; i++) {
                     const v = getter(i);
-                    if (v == null || String(v).trim() === '') continue;
-                    counts.set(String(v).trim(), (counts.get(String(v).trim()) || 0) + 1);
+                    if (_isNullish(v)) continue;
+                    const k = String(v).trim();
+                    counts.set(k, (counts.get(k) || 0) + 1);
                 }
                 const mask = new Uint8Array(n);
                 for (let i = 0; i < n; i++) {
                     const v = getter(i);
-                    if (v != null && counts.get(String(v).trim()) > 1) mask[i] = 1;
+                    if (!_isNullish(v) && counts.get(String(v).trim()) > 1) mask[i] = 1;
                 }
                 mkModal('Duplicate ISINs', () => mask, 'error', {
                     isin: 'ISIN', description: 'Description', userSide: 'Side', grossSize: 'Size',
@@ -1381,7 +1407,7 @@ export class OverviewWidget extends BaseWidget {
                 const now = Date.now();
                 let count = 0;
                 for (const v of arr) {
-                    if (v == null) continue;
+                    if (_isNullish(v) || v === 0 || v === false) continue;
                     const d = new Date(v);
                     if (!isNaN(d.getTime()) && d.getTime() < now) count++;
                 }
@@ -1395,7 +1421,7 @@ export class OverviewWidget extends BaseWidget {
                     if (!eng) return '';
                     const now = Date.now();
                     return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'maturityDate', (v) => {
-                        if (v == null) return false;
+                        if (_isNullish(v) || v === 0 || v === false) return false;
                         const d = new Date(v);
                         return !isNaN(d.getTime()) && d.getTime() < now;
                     })));
@@ -1404,7 +1430,7 @@ export class OverviewWidget extends BaseWidget {
             modal: (_e, p) => {
                 const now = Date.now();
                 mkModal('Matured Bonds', (eng) => maskByPredicate(eng, 'maturityDate', (v) => {
-                    if (v == null) return false;
+                    if (_isNullish(v) || v === 0 || v === false) return false;
                     const d = new Date(v);
                     return !isNaN(d.getTime()) && d.getTime() < now;
                 }), 'error', ['description', 'isin', 'maturityDate', 'grossSize'])(p);
