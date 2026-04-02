@@ -183,6 +183,27 @@ function modalPayload(title, lines, cols, type) {
  * Factory: returns a function suitable for pill.modalFn.
  * colSpec can be an array of column names, or an object { colName: headerLabel }.
  */
+/** Columns that should be formatted as numbers in modal tables. */
+const NUMERIC_MODAL_COLS = new Set([
+    'grossSize', 'netSize', 'grossDv01', 'netDv01', 'unitDv01',
+    'amountOutstanding', 'amountIssued',
+    'firmAggBsrSize', 'duration', 'daysToSettle',
+    'liqScoreCombined', 'macpLiqScore', 'lqaLiqScore',
+    'bvalMidPx', 'bvalMidSpd', 'bvalMidYld', 'bvalMidDm', 'bvalMidMmy',
+    'macpMidPx', 'macpMidSpd', 'macpMidYld', 'macpMidDm', 'macpMidMmy',
+    'cbbtMidPx', 'cbbtMidSpd', 'cbbtMidYld', 'cbbtMidDm', 'cbbtMidMmy',
+    'amMidPx', 'amMidSpd', 'amMidYld', 'amMidDm', 'amMidMmy',
+]);
+
+function _fmtModalVal(v, col) {
+    if (v == null) return '';
+    if (NUMERIC_MODAL_COLS.has(col)) {
+        const n = +v;
+        if (Number.isFinite(n)) return NumberFormatter.formatNumber(n, { prefix: '', sigFigs: { global: 2 } });
+    }
+    return String(v);
+}
+
 function mkModal(title, maskFn, type, colSpec, subtitle, sortCols) {
     return (pill) => {
         const eng = pill.mgr.engine;
@@ -208,7 +229,7 @@ function mkModal(title, maskFn, type, colSpec, subtitle, sortCols) {
             const row = [];
             for (let c = 0; c < displayCols.length; c++) {
                 const v = getters[c](i);
-                row.push(v == null ? '' : String(v));
+                row.push(_fmtModalVal(v, displayCols[c]));
             }
             rows.push(row);
         }
@@ -1844,7 +1865,7 @@ export class OverviewWidget extends BaseWidget {
                     rows.push({
                         cells: [
                             String(getDesc(i) ?? ''), String(getIsin(i) ?? ''), qt,
-                            ...mktKeys.map(k => vals[k] != null ? String(vals[k]) : ''),
+                            ...mktKeys.map(k => vals[k] != null ? _fmtModalVal(vals[k], `${k}Mid${suffix}`) : ''),
                         ],
                         outlierMkt,
                         useAm,
