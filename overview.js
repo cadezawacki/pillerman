@@ -857,14 +857,18 @@ export class OverviewWidget extends BaseWidget {
                 const m = p.mgr.context.page._metaStore; if (!m) return null;
                 const side = m.get('rfqSide');
                 if (side !== 'BWIC' && side !== 'BOWIC') return null;
-                let y = m.get('bwicYrsToMaturity') ?? m.get('yrsToMaturity');
-                const bucket = maturityBucket(y);
 
-                // Quality concentration — for BOWIC use metaStore per-side rating,
-                // for pure BWIC use engine-wide analysis (all bonds are sell-side)
+                // Maturity bucket — only show when maturity is concentrated
+                let bucket = null;
+                const hhi = m.get('hhiMaturityBucket');
+                if (hhi == null || hhi > 0.4) {
+                    let y = m.get('bwicYrsToMaturity') ?? m.get('yrsToMaturity');
+                    bucket = maturityBucket(y);
+                }
+
+                // Quality concentration
                 let quality = null;
                 if (side === 'BOWIC') {
-                    // Suppress quality when both sides resolve to the same label
                     const sq = _ratingToQualityLabel(m.get('bwicCreditRating'));
                     const bq = _ratingToQualityLabel(m.get('owicCreditRating'));
                     if (sq && sq !== bq) quality = sq;
@@ -884,8 +888,13 @@ export class OverviewWidget extends BaseWidget {
                 const m = p.mgr.context.page._metaStore; if (!m) return null;
                 const side = m.get('rfqSide');
                 if (side !== 'OWIC' && side !== 'BOWIC') return null;
-                let y = m.get('owicYrsToMaturity') ?? m.get('yrsToMaturity');
-                const bucket = maturityBucket(y);
+
+                let bucket = null;
+                const hhi = m.get('hhiMaturityBucket');
+                if (hhi == null || hhi > 0.4) {
+                    let y = m.get('owicYrsToMaturity') ?? m.get('yrsToMaturity');
+                    bucket = maturityBucket(y);
+                }
 
                 let quality = null;
                 if (side === 'BOWIC') {
