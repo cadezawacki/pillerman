@@ -1657,20 +1657,34 @@ export class OverviewWidget extends BaseWidget {
                 const eng = p.mgr.engine;
                 if (!eng) return;
                 const n = eng.numRows() | 0;
-                const mask = new Uint8Array(n);
                 const getO = eng._getValueGetter('amountOutstanding');
                 const getI = eng._getValueGetter('amountIssued');
+                const getDesc = eng._getValueGetter('description');
+                const getIsin = eng._getValueGetter('isin');
+                const fmtAmt = (v) => NumberFormatter.formatNumber(v, { prefix: '', sigFigs: { global: 0 } });
+
+                const headers = ['Description', 'ISIN', 'Amt Outstanding', 'Amt Issued', '% Outstanding'];
+                const rows = [];
                 for (let i = 0; i < n; i++) {
                     const o = getO(i), iss = getI(i);
                     if (_isNullish(o) || _isNullish(iss)) continue;
                     const on = +o, isn = +iss;
                     if (!Number.isFinite(on) || !Number.isFinite(isn) || isn <= 0) continue;
-                    if (on / isn < OUTSTANDING_THRESHOLD) mask[i] = 1;
+                    if (on / isn >= OUTSTANDING_THRESHOLD) continue;
+                    rows.push([
+                        String(getDesc(i) ?? ''),
+                        String(getIsin(i) ?? ''),
+                        fmtAmt(on),
+                        fmtAmt(isn),
+                        `${Math.round(on / isn * 100)}%`,
+                    ]);
                 }
-                mkModal('Low Amount Outstanding', () => mask, 'warning', {
-                    description: 'Description', isin: 'ISIN',
-                    amountOutstanding: 'Amt Outstanding', amountIssued: 'Amt Issued',
-                })(p);
+
+                const tableData = [headers, ...rows];
+                const table = buildTable(tableData);
+                const sub = rows.length > 0 ? `${rows.length} bond${rows.length > 1 ? 's' : ''}` : null;
+                const html = table ? table.outerHTML : '<p>No matching rows.</p>';
+                p.mgr.createInfoModal('Low Amount Outstanding', html, 'warning', sub);
             },
         }, FLAGS);
 
