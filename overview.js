@@ -40,13 +40,23 @@ const REQUIRED_COLUMNS = Object.freeze([
     'QT',
     // Distribution bar dropdown options (categorical)
     'deskAsset', 'regionCountry', 'desigName', 'maturityBucket',
-    'ratingCombined', 'ratingMnemonic', 'industrySector',
+    'ratingCombined', 'ratingMnemonic', 'ratingAssetClass', 'industrySector',
     // Pill flags
     'description', 'isin', 'currency', 'isPriced', 'claimed',
     'isMuni', 'isNewIssue', 'isInDefault', 'isDnt', 'restrictedCode',
     'daysToSettle', 'isRfqBenchmarkMismatch', 'isBvalBenchmarkMismatch',
     'isMacpBenchmarkMismatch', 'isStub', 'assignedTrader', 'grossSize',
     'isReal', 'quoteType',
+    // Amount outstanding / issued
+    'amountOutstanding', 'amountIssued',
+    // Reference market mid columns (all QT variants × 4 markets)
+    'bvalMidPx', 'bvalMidSpd', 'bvalMidYld', 'bvalMidDm', 'bvalMidMmy',
+    'macpMidPx', 'macpMidSpd', 'macpMidYld', 'macpMidDm', 'macpMidMmy',
+    'cbbtMidPx', 'cbbtMidSpd', 'cbbtMidYld', 'cbbtMidDm', 'cbbtMidMmy',
+    'usMarkMidPx', 'usMarkMidSpd', 'usMarkMidYld', 'usMarkMidDm', 'usMarkMidMmy',
+    'amMidPx', 'amMidSpd', 'amMidYld', 'amMidDm', 'amMidMmy',
+    // Floater / perpetual / hybrid flags (gate AM in ref variance)
+    'isFloater', 'isPerpetual', 'isHybrid',
 ]);
 
 const SORT_ORDERS = Object.freeze({
@@ -69,6 +79,51 @@ function maskByPredicate(engine, col, pred) {
     const mask = new Uint8Array(n);
     for (let i = 0; i < n; i++) {
         if (pred(getter(i))) mask[i] = 1;
+    }
+    return mask;
+}
+
+/**
+ * Returns true when a value should be considered "missing" for
+ * benchmark comparison purposes — null, undefined, empty string,
+ * the literal strings "null"/"undefined"/"N/A", zero, or false.
+ */
+function _isMissingBenchmark(v) {
+    if (v == null) return true;                   // null | undefined
+    if (v === 0 || v === 0n || v === false) return true; // falsy non-string (incl BigInt)
+    const s = String(v).trim().toLowerCase();
+    return s === '' || s === 'null' || s === 'undefined' || s === 'n/a';
+}
+
+/**
+ * General-purpose "is this value absent?" check.
+ * Catches null, undefined, empty/whitespace strings, and the literal
+ * strings "null", "undefined", "N/A".  Does NOT reject 0 or false
+ * so numeric fields with legitimate zeroes are preserved.
+ */
+function _isNullish(v) {
+    if (v == null) return true;
+    if (typeof v === 'string') {
+        const s = v.trim().toLowerCase();
+        return s === '' || s === 'null' || s === 'undefined' || s === 'n/a';
+    }
+    return false;
+}
+
+/**
+ * Given an engine and two column names, return a boolean mask
+ * of which rows have mismatched values.
+ * A row is skipped (never flagged) when either side is missing.
+ */
+function maskByMismatch(engine, colA, colB) {
+    const n = engine.numRows() | 0;
+    const getA = engine._getValueGetter(colA);
+    const getB = engine._getValueGetter(colB);
+    const mask = new Uint8Array(n);
+    for (let i = 0; i < n; i++) {
+        const a = getA(i), b = getB(i);
+        if (_isMissingBenchmark(a) || _isMissingBenchmark(b)) continue;
+        if (a !== b) mask[i] = 1;
     }
     return mask;
 }
@@ -128,6 +183,27 @@ function modalPayload(title, lines, cols, type) {
  * Factory: returns a function suitable for pill.modalFn.
  * colSpec can be an array of column names, or an object { colName: headerLabel }.
  */
+/** Columns that should be formatted as numbers in modal tables. */
+const NUMERIC_MODAL_COLS = new Set([
+    'grossSize', 'netSize', 'grossDv01', 'netDv01', 'unitDv01',
+    'amountOutstanding', 'amountIssued',
+    'firmAggBsrSize', 'duration', 'daysToSettle',
+    'liqScoreCombined', 'macpLiqScore', 'lqaLiqScore',
+    'bvalMidPx', 'bvalMidSpd', 'bvalMidYld', 'bvalMidDm', 'bvalMidMmy',
+    'macpMidPx', 'macpMidSpd', 'macpMidYld', 'macpMidDm', 'macpMidMmy',
+    'cbbtMidPx', 'cbbtMidSpd', 'cbbtMidYld', 'cbbtMidDm', 'cbbtMidMmy',
+    'amMidPx', 'amMidSpd', 'amMidYld', 'amMidDm', 'amMidMmy',
+]);
+
+function _fmtModalVal(v, col) {
+    if (v == null) return '';
+    if (NUMERIC_MODAL_COLS.has(col)) {
+        const n = +v;
+        if (Number.isFinite(n)) return NumberFormatter.formatNumber(n, { prefix: '', sigFigs: { global: 2 } });
+    }
+    return String(v);
+}
+
 function mkModal(title, maskFn, type, colSpec, subtitle, sortCols) {
     return (pill) => {
         const eng = pill.mgr.engine;
@@ -153,7 +229,7 @@ function mkModal(title, maskFn, type, colSpec, subtitle, sortCols) {
             const row = [];
             for (let c = 0; c < displayCols.length; c++) {
                 const v = getters[c](i);
-                row.push(v == null ? '' : String(v));
+                row.push(_fmtModalVal(v, displayCols[c]));
             }
             rows.push(row);
         }
@@ -318,6 +394,122 @@ function maturityBucket(y) {
 
 function hhiClass(v) { return v == null ? null : (v > 0.7 ? 'Highly Concentrated' : (v < 0.2 ? 'Diversified' : null)); }
 
+/* ─────────── Quality concentration helpers ─────────── */
+
+const QUALITY_CONC_THRESHOLD = 0.75;  // asset-class must be >75% of gross
+const MNEMONIC_CONC_THRESHOLD = 0.50; // mnemonic must be >50% for finer label
+
+/** Map ratingMnemonic values (GRADE or QUALITY naming) to display labels */
+const MNEMONIC_DISPLAY = Object.freeze({
+    'PRIME': 'Prime',
+    'IG_HIGH_GRADE': 'HQ', 'IG_HIGH_QUALITY': 'HQ',
+    'IG_MEDIUM_GRADE': 'MQ', 'IG_MEDIUM_QUALITY': 'MQ',
+    'IG_LOW_GRADE': 'LQ', 'IG_LOW_QUALITY': 'LQ',
+    'HY_UPPER_GRADE': 'Upper-HY', 'HY_UPPER_QUALITY': 'Upper-HY',
+    'HY_LOWER_GRADE': 'Lower-HY', 'HY_LOWER_QUALITY': 'Lower-HY',
+    'JUNK_UPPER_GRADE': 'Junk', 'JUNK_UPPER_QUALITY': 'Junk',
+    'JUNK_MEDIUM_GRADE': 'Junk', 'JUNK_MEDIUM_QUALITY': 'Junk',
+    'JUNK_LOW_GRADE': 'Deep Junk', 'JUNK_LOW_QUALITY': 'Deep Junk',
+    'JUNK_GRADE': 'Junk', 'JUNK_QUALITY': 'Junk', 'JUNK': 'Junk',
+    'IN_DEFAULT': 'Defaulted',
+});
+
+/** Map an S&P rating string to its asset class (IG / HY / JUNK). */
+const RATING_TO_CLASS = Object.freeze({
+    'AAA': 'IG', 'AA+': 'IG', 'AA': 'IG', 'AA-': 'IG',
+    'A+': 'IG', 'A': 'IG', 'A-': 'IG',
+    'BBB+': 'IG', 'BBB': 'IG', 'BBB-': 'IG',
+    'BB+': 'HY', 'BB': 'HY', 'BB-': 'HY',
+    'B+': 'HY', 'B': 'HY', 'B-': 'HY',
+    'CCC+': 'JUNK', 'CCC': 'JUNK', 'CCC-': 'JUNK',
+    'CC': 'JUNK', 'C': 'JUNK',
+    'D': 'JUNK',
+});
+
+/** Map an S&P rating string to a display-quality label. */
+const RATING_TO_MNEMONIC = Object.freeze({
+    'AAA': 'PRIME',
+    'AA+': 'IG_HIGH_QUALITY', 'AA': 'IG_HIGH_QUALITY', 'AA-': 'IG_HIGH_QUALITY',
+    'A+': 'IG_MEDIUM_QUALITY', 'A': 'IG_MEDIUM_QUALITY', 'A-': 'IG_MEDIUM_QUALITY',
+    'BBB+': 'IG_LOW_QUALITY', 'BBB': 'IG_LOW_QUALITY', 'BBB-': 'IG_LOW_QUALITY',
+    'BB+': 'HY_UPPER_QUALITY', 'BB': 'HY_UPPER_QUALITY', 'BB-': 'HY_UPPER_QUALITY',
+    'B+': 'HY_LOWER_QUALITY', 'B': 'HY_LOWER_QUALITY', 'B-': 'HY_LOWER_QUALITY',
+    'CCC+': 'JUNK', 'CCC': 'JUNK', 'CCC-': 'JUNK',
+    'CC': 'JUNK', 'C': 'JUNK',
+    'D': 'IN_DEFAULT',
+});
+
+/**
+ * Analyze quality concentration across engine rows.
+ * Returns a concise label ("Low-Quality", "HY", etc.) or null if mixed.
+ */
+function _qualityConcentration(eng) {
+    const n = eng.numRows() | 0;
+    if (n === 0) return null;
+
+    const getClass = eng._getValueGetter('ratingAssetClass');
+    const getMnem = eng._getValueGetter('ratingMnemonic');
+    const getSize = eng._getValueGetter('grossSize');
+
+    const classTotals = {};
+    const mnemTotals = {};
+    let total = 0;
+
+    for (let i = 0; i < n; i++) {
+        const sz = Math.abs(+(getSize(i)) || 0);
+        const cls = getClass(i);
+        if (_isNullish(cls)) continue;
+        const c = String(cls).trim().toUpperCase();
+        classTotals[c] = (classTotals[c] || 0) + sz;
+
+        const m = getMnem(i);
+        if (!_isNullish(m)) {
+            const mk = String(m).trim();
+            mnemTotals[mk] = (mnemTotals[mk] || 0) + sz;
+        }
+        total += sz;
+    }
+
+    if (total === 0) return null;
+
+    // Find dominant asset class
+    let domClass = null, domPct = 0;
+    for (const [cls, amt] of Object.entries(classTotals)) {
+        const pct = amt / total;
+        if (pct > domPct) { domPct = pct; domClass = cls; }
+    }
+
+    if (domPct < QUALITY_CONC_THRESHOLD) return null; // mixed IG/HY — no label
+
+    // Within dominant class, find the dominant mnemonic for a finer label
+    const classRe = domClass === 'IG' ? /^(PRIME|IG_)/
+        : domClass === 'HY' ? /^HY_/
+        : /^(JUNK|IN_DEFAULT)/;
+
+    let domMnem = null, domMnemAmt = 0;
+    for (const [mnem, amt] of Object.entries(mnemTotals)) {
+        if (!classRe.test(mnem)) continue;
+        if (amt > domMnemAmt) { domMnemAmt = amt; domMnem = mnem; }
+    }
+
+    if (domMnem && domMnemAmt / total > MNEMONIC_CONC_THRESHOLD) {
+        return MNEMONIC_DISPLAY[domMnem] || domClass;
+    }
+
+    return domClass; // "IG", "HY", or "JUNK"
+}
+
+/**
+ * Derive a quality label from a single S&P rating string (metaStore value).
+ * Returns a display label or null.
+ */
+function _ratingToQualityLabel(rating) {
+    if (_isNullish(rating)) return null;
+    const r = String(rating).trim().toUpperCase();
+    const mnem = RATING_TO_MNEMONIC[r];
+    return mnem ? (MNEMONIC_DISPLAY[mnem] || RATING_TO_CLASS[r] || null) : null;
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    OVERVIEW WIDGET
    ═══════════════════════════════════════════════════════════════════════════ */
@@ -334,6 +526,7 @@ export class OverviewWidget extends BaseWidget {
         this.pillManager = this.context.page.pillManager;
         this._rendered = false;
         this._ownedPills = [];
+        this._cachedTotals = null; // { grossSize, grossDv01, _normalizedRisk } — invalidated on epoch-change
         this._debouncedMetaRefresh = null;
         this._stack = null;
         this._headerRow = null;
@@ -385,6 +578,13 @@ export class OverviewWidget extends BaseWidget {
                     });
                 }
                 await this.refreshOverview();
+                // Weight changed — force-update pills with dynamic columns (ETF overlap, etc.)
+                const pm = this.context.page.pillManager;
+                if (pm) {
+                    for (const pill of pm.pills.values()) {
+                        if (typeof pill.columns === 'function') pill.update();
+                    }
+                }
             });
             this._permanentSubs.push(unsub);
         }
@@ -648,7 +848,7 @@ export class OverviewWidget extends BaseWidget {
         }, DETAILS);
 
         pill('custom', {
-            id: 'liquidityBasket', type: 'portfolio',
+            id: 'liquidityBasket', columns: 'liqScoreCombined', source: 'store', type: 'status',
             valueGetter: async (_data, p) => p.mgr.context.page._metaStore?.get('liqScoreCombined') ?? null,
             valueFormatter: (score) => {
                 if (score == null) return null;
@@ -656,30 +856,66 @@ export class OverviewWidget extends BaseWidget {
                 if (score < 4) return 'Illiquid Basket';
                 return null;
             },
-            styleRules: [{ gt: 7, color: 'green', type: 'status' }, { lt: 4, color: 'red', type: 'warning' }],
+            styleRules: [{ gt: 7, color: 'green', type: 'status' }, { lt: 4, color: 'red', type: 'error' }],
         }, DETAILS);
 
         pill('custom', {
-            id: 'clientSellingBucket', type: 'portfolio',
+            id: 'clientSellingBucket', columns: 'rfqSide', source: 'store', type: 'portfolio',
             valueGetter: async (_data, p) => {
                 const m = p.mgr.context.page._metaStore; if (!m) return null;
                 const side = m.get('rfqSide');
                 if (side !== 'BWIC' && side !== 'BOWIC') return null;
-                let y = m.get('bwicYrsToMaturity') ?? m.get('yrsToMaturity');
-                const b = maturityBucket(y);
-                return b ? `Client Selling: ${b}` : null;
+
+                // Maturity bucket — only show when maturity is concentrated
+                let bucket = null;
+                const hhi = m.get('hhiMaturityBucket');
+                if (hhi == null || hhi > 0.4) {
+                    let y = m.get('bwicYrsToMaturity') ?? m.get('yrsToMaturity');
+                    bucket = maturityBucket(y);
+                }
+
+                // Quality concentration
+                let quality = null;
+                if (side === 'BOWIC') {
+                    const sq = _ratingToQualityLabel(m.get('bwicCreditRating'));
+                    const bq = _ratingToQualityLabel(m.get('owicCreditRating'));
+                    if (sq && sq !== bq) quality = sq;
+                } else {
+                    const eng = p.mgr.engine;
+                    if (eng) quality = _qualityConcentration(eng);
+                }
+
+                const parts = [quality, bucket].filter(Boolean);
+                return parts.length ? `Client Selling: ${parts.join(' ')}` : null;
             },
         }, DETAILS);
 
         pill('custom', {
-            id: 'clientBuyingBucket', type: 'portfolio',
+            id: 'clientBuyingBucket', columns: 'rfqSide', source: 'store', type: 'portfolio',
             valueGetter: async (_data, p) => {
                 const m = p.mgr.context.page._metaStore; if (!m) return null;
                 const side = m.get('rfqSide');
                 if (side !== 'OWIC' && side !== 'BOWIC') return null;
-                let y = m.get('owicYrsToMaturity') ?? m.get('yrsToMaturity');
-                const b = maturityBucket(y);
-                return b ? `Client Buying: ${b}` : null;
+
+                let bucket = null;
+                const hhi = m.get('hhiMaturityBucket');
+                if (hhi == null || hhi > 0.4) {
+                    let y = m.get('owicYrsToMaturity') ?? m.get('yrsToMaturity');
+                    bucket = maturityBucket(y);
+                }
+
+                let quality = null;
+                if (side === 'BOWIC') {
+                    const bq = _ratingToQualityLabel(m.get('owicCreditRating'));
+                    const sq = _ratingToQualityLabel(m.get('bwicCreditRating'));
+                    if (bq && bq !== sq) quality = bq;
+                } else {
+                    const eng = p.mgr.engine;
+                    if (eng) quality = _qualityConcentration(eng);
+                }
+
+                const parts = [quality, bucket].filter(Boolean);
+                return parts.length ? `Client Buying: ${parts.join(' ')}` : null;
             },
         }, DETAILS);
 
@@ -704,8 +940,9 @@ export class OverviewWidget extends BaseWidget {
                 id: `pctInEtf-${etf}`, type: 'status',
                 columns: () => [etf, self.getActiveWeightKey()],
                 valueGetter: (data) => {
-                    const wc = Object.keys(data).filter(x => !x.startsWith('inEtf'));
-                    const ws = data[wc[0]]; const es = data[etf];
+                    const wk = self.getActiveWeightKey();
+                    const ws = data[wk]; const es = data[etf];
+                    if (!ws || !es) return null;
                     let num = 0, den = 0;
                     for (let i = 0; i < es.length; i++) {
                         const w = ws[i]; den += w;
@@ -740,6 +977,956 @@ export class OverviewWidget extends BaseWidget {
                 },
             }, DETAILS);
         }
+
+        /* ═══════ FLAG PILLS (warnings / errors — mounted to FLAGS) ═══════ */
+
+        // Inline count helper — pill.equals is NOT persisted by the Pill
+        // constructor, so the count recipe's default test always falls back
+        // to (v) => v != null.  We provide our own valueGetter to embed
+        // the predicate directly inside the closure.
+        const countBy = (pred) => async (data) => (data || []).filter(pred).length;
+
+        // ────── Missing Data ──────
+
+        pill('count', {
+            id: 'pill_missing_descriptions', columns: 'description', type: 'error',
+            valueGetter: countBy((v) => v == null || String(v).trim() === ''),
+            valueFormatter: (count) => count > 0 ? `Missing Descriptions: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'description', (v) => v == null || String(v).trim() === '')));
+                },
+            },
+            modal: (_e, p) => mkModal('Missing Descriptions', (eng) => maskByPredicate(eng, 'description', (v) => v == null || String(v).trim() === ''))(p),
+        }, FLAGS);
+
+        pill('count', {
+            id: 'pill_missing_dv01', columns: 'grossDv01', type: 'error',
+            valueGetter: countBy((v) => v == null),
+            valueFormatter: (count) => count > 0 ? `Missing DV01: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'grossDv01', (v) => v == null)));
+                },
+            },
+            modal: (_e, p) => mkModal('Missing DV01', (eng) => maskByPredicate(eng, 'grossDv01', (v) => v == null), 'info', ['description', 'isin', 'grossSize'])(p),
+        }, FLAGS);
+
+        pill('count', {
+            id: 'pill_missing_desig', columns: 'desigName', type: 'error',
+            valueGetter: countBy((v) => v == null || String(v).trim() === ''),
+            valueFormatter: (count) => count > 0 ? `Missing Desig: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'desigName', (v) => v == null || String(v).trim() === ''), ['description']));
+                },
+            },
+            modal: (_e, p) => mkModal('Missing Desig', (eng) => maskByPredicate(eng, 'desigName', (v) => v == null || String(v).trim() === ''))(p),
+        }, FLAGS);
+
+        pill('count', {
+            id: 'pill_missing_assigned', columns: 'assignedTrader', type: 'error',
+            valueGetter: countBy((v) => v == null || String(v).trim() === ''),
+            valueFormatter: (count) => count > 0 ? `Unassigned: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'assignedTrader', (v) => v == null || String(v).trim() === ''), ['description']));
+                },
+            },
+            modal: (_e, p) => mkModal('Unassigned Bonds', (eng) => maskByPredicate(eng, 'assignedTrader', (v) => v == null || String(v).trim() === ''))(p),
+        }, FLAGS);
+
+        // ────── Trade Flags ──────
+
+        pill('count', {
+            id: 'pill_dnt_count', columns: 'isDnt', type: 'error',
+            valueGetter: countBy((v) => coerceToBool(v)),
+            valueFormatter: (count) => count > 0 ? `DNT Bonds: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'isDnt', (v) => coerceToBool(v)), ['description']));
+                },
+            },
+            modal: (_e, p) => mkModal('DNT Bonds', (eng) => maskByPredicate(eng, 'isDnt', (v) => coerceToBool(v)), 'info', {
+                isin: 'ISIN', description: 'Description', userSide: 'Side', grossSize: 'Size',
+                desigName: 'Desig', assignedTrader: 'Assigned', dntComment: 'DNT', dntEventEnd: 'End Time', dntModifiedBy: 'Modified By',
+            })(p),
+        }, FLAGS);
+
+        pill('count', {
+            id: 'pill_restrictedCode_count', columns: 'restrictedCode', type: 'error',
+            valueGetter: countBy((v) => v != null),
+            valueFormatter: (count) => count > 0 ? `RESTRICTED: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'restrictedCode', (v) => v != null), ['description']));
+                },
+            },
+            modal: (_e, p) => mkModal('Restricted Bonds', (eng) => maskByPredicate(eng, 'restrictedCode', (v) => v != null), 'info', {
+                isin: 'ISIN', description: 'Description', userSide: 'Side', grossSize: 'Size',
+                desigName: 'Desig', assignedTrader: 'Assigned', restrictedCode: 'Code', restrictionTier: 'Tier', restrictionTime: 'Time',
+            })(p),
+        }, FLAGS);
+
+        const _isNotReal = (v) => {
+            if (v == null || v === false) return true;
+            if (typeof v === 'bigint') return v === 0n;
+            const s = String(v).trim().toLowerCase();
+            return s === '0' || s === 'false';
+        };
+
+        pill('count', {
+            id: 'pill_removed_bonds', columns: 'isReal', type: 'warning',
+            valueGetter: countBy(_isNotReal),
+            valueFormatter: (count) => count > 0 ? `Removed: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'isReal', _isNotReal), ['description']));
+                },
+            },
+            modal: (_e, p) => mkModal('Removed Bonds', (eng) => maskByPredicate(eng, 'isReal', _isNotReal), 'warning', ['description', 'isin', 'userSide', 'grossSize'])(p),
+        }, FLAGS);
+
+        pill('count', {
+            id: 'pill_contains_default', columns: 'isInDefault', type: 'error',
+            valueGetter: countBy((v) => +v === 1),
+            valueFormatter: (count) => count ? 'Contains Default' : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'isInDefault', (v) => +v === 1)));
+                },
+            },
+            modal: (_e, p) => mkModal('Contains Default', (eng) => maskByPredicate(eng, 'isInDefault', (v) => +v === 1))(p),
+        }, FLAGS);
+
+        pill('count', {
+            id: 'pill_contains_new_issue', columns: 'isNewIssue', type: 'warning',
+            valueGetter: countBy((v) => +v === 1),
+            valueFormatter: (count) => count ? 'Contains New Issue' : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'isNewIssue', (v) => +v === 1)));
+                },
+            },
+            modal: (_e, p) => mkModal('Contains New Issue', (eng) => maskByPredicate(eng, 'isNewIssue', (v) => +v === 1), 'info', ['description', 'isin', 'issueDate', 'isWhenIssued', 'announcementDate'])(p),
+        }, FLAGS);
+
+        pill('count', {
+            id: 'pill_contains_muni', columns: 'isMuni', type: 'warning',
+            valueGetter: countBy((v) => +v === 1),
+            valueFormatter: (count) => count ? 'Contains Muni' : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'isMuni', (v) => +v === 1)));
+                },
+            },
+            modal: (_e, p) => mkModal('Contains Muni', (eng) => maskByPredicate(eng, 'isMuni', (v) => +v === 1))(p),
+        }, FLAGS);
+
+        // ────── Market / Benchmark ──────
+
+        pill('notDistinct', {
+            id: 'quoteType', columns: 'quoteType', type: 'warning', label: 'Multi QT:',
+            valueFormatter: (val) => Array.from(val?.seenValues || []).toSorted().join(', '),
+            nullPolicy: 'hide',
+        }, FLAGS);
+
+        pill('distinct', {
+            id: 'currency', columns: 'currency', type: 'warning',
+            condition: (val) => val != null && (val.distinct > 1 || !val.seenValues.includes('USD')),
+            valueFormatter: (val) => {
+                if (val.distinct > 1) return `Multi Currency: ${Array.from(val.seenValues).toSorted().join(', ')}`;
+                if (!val.seenValues.includes('USD')) return `Non-USD: ${Array.from(val.seenValues).toSorted().join(', ')}`;
+                return null;
+            },
+        }, FLAGS);
+
+        pill('meta', {
+            id: 'isCrossed', columns: 'isCrossed', type: 'warning',
+            valueFormatter: (v) => v ? 'TSY CROSSED' : null,
+        }, FLAGS);
+
+        pill('meta', {
+            id: 'removedCount', columns: 'removedCount', type: 'warning',
+            valueFormatter: (v) => v > 0 ? `Removed bonds: ${v | 0}` : null,
+        }, FLAGS);
+
+        pill('custom', {
+            id: 'pill_rfq_bmk_mismatch', columns: ['rfqBenchmarkIsin', 'benchmarkIsin'], type: 'error',
+            valueGetter: async (data) => {
+                const left = data?.rfqBenchmarkIsin || [];
+                const right = data?.benchmarkIsin || [];
+                let count = 0;
+                for (let i = 0; i < Math.max(left.length, right.length); i++) {
+                    if (_isMissingBenchmark(left[i]) || _isMissingBenchmark(right[i])) continue;
+                    if (left[i] !== right[i]) count++;
+                }
+                return count > 0 ? count : null;
+            },
+            valueFormatter: (count) => count ? 'RFQ Benchmark Mismatch' : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByMismatch(eng, 'rfqBenchmarkIsin', 'benchmarkIsin')));
+                },
+            },
+            modal: (_e, p) => mkModal('RFQ Benchmark Mismatch', (eng) => maskByMismatch(eng, 'rfqBenchmarkIsin', 'benchmarkIsin'), 'error')(p),
+        }, FLAGS);
+
+        pill('custom', {
+            id: 'pill_bval_mismatch', columns: ['bvalBenchmarkIsin', 'benchmarkIsin'], type: 'error',
+            valueGetter: async (data) => {
+                const left = data?.bvalBenchmarkIsin || [];
+                const right = data?.benchmarkIsin || [];
+                let count = 0;
+                for (let i = 0; i < Math.max(left.length, right.length); i++) {
+                    if (_isMissingBenchmark(left[i]) || _isMissingBenchmark(right[i])) continue;
+                    if (left[i] !== right[i]) count++;
+                }
+                return count > 0 ? count : null;
+            },
+            valueFormatter: (count) => count > 0 ? `BVAL Mismatch: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByMismatch(eng, 'bvalBenchmarkIsin', 'benchmarkIsin'), ['description']));
+                },
+            },
+            modal: (_e, p) => mkModal('BVAL Benchmark Mismatch', (eng) => maskByMismatch(eng, 'bvalBenchmarkIsin', 'benchmarkIsin'), 'info', {
+                isin: 'ISIN', description: 'Description', bvalBenchmarkTenor: 'BVAL BM', bvalBenchmarkIsin: 'BVAL ISIN',
+                benchmarkName: 'PT BM', benchmarkIsin: 'PT Bench ISIN', bvalBenchYldDiff: 'Approx. BPS Diff',
+            }, 'Note: [approx bps diff] = ( [live yld of BVAL tenor] - [live yld of PT tenor] ) * 100', ['benchmarkName', 'description'])(p),
+        }, FLAGS);
+
+        pill('custom', {
+            id: 'pill_macp_mismatch', columns: ['macpBenchmarkIsin', 'benchmarkIsin'], type: 'error',
+            valueGetter: async (data) => {
+                const left = data?.macpBenchmarkIsin || [];
+                const right = data?.benchmarkIsin || [];
+                let count = 0;
+                for (let i = 0; i < Math.max(left.length, right.length); i++) {
+                    if (_isMissingBenchmark(left[i]) || _isMissingBenchmark(right[i])) continue;
+                    if (left[i] !== right[i]) count++;
+                }
+                return count > 0 ? count : null;
+            },
+            valueFormatter: (count) => count > 0 ? `CP+ Mismatch: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByMismatch(eng, 'macpBenchmarkIsin', 'benchmarkIsin'), ['description']));
+                },
+            },
+            modal: (_e, p) => mkModal('CP+ Benchmark Mismatch', (eng) => maskByMismatch(eng, 'macpBenchmarkIsin', 'benchmarkIsin'), 'info', {
+                isin: 'ISIN', description: 'Description', macpBenchmarkTenor: 'CP+ BM', macpBenchmarkIsin: 'CP+ ISIN',
+                benchmarkName: 'PT BM', benchmarkIsin: 'PT Bench ISIN',
+            }, null, ['benchmarkName', 'description'])(p),
+        }, FLAGS);
+
+        // ────── Size / Settlement ──────
+
+        pill('count', {
+            id: 'pill_blocks_over_10m', columns: 'grossSize', type: 'warning',
+            valueGetter: countBy((v) => Math.abs(+v || 0) > 10_000_000),
+            valueFormatter: (count) => count ? `Blocks: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'grossSize', (v) => Math.abs(+v || 0) > 10_000_000)));
+                },
+            },
+            modal: (_e, p) => mkModal('Blocks > 10mm', (eng) => maskByPredicate(eng, 'grossSize', (v) => Math.abs(+v || 0) > 10_000_000), 'info', ['description', 'isin', 'userSide', 'grossSize'])(p),
+        }, FLAGS);
+
+        pill('count', {
+            id: 'pill_stub', columns: 'isStub', type: 'warning',
+            valueGetter: countBy((v) => v === 1),
+            valueFormatter: (count) => count > 0 ? `Stub Sizes: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'isStub', (v) => v === 1), ['description']));
+                },
+            },
+            modal: (_e, p) => mkModal('Stub Sizes', (eng) => maskByPredicate(eng, 'isStub', (v) => v === 1), 'info', ['isin', 'description', 'grossSize'])(p),
+        }, FLAGS);
+
+        pill('count', {
+            id: 'pill_non_standard_settle', columns: 'daysToSettle', type: 'warning',
+            valueGetter: countBy((v) => (+v || 0) > 2),
+            valueFormatter: (count) => count ? `Non-Standard Settle: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'daysToSettle', (v) => (+v || 0) > 2), ['description', 'daysToSettle']));
+                },
+            },
+            modal: (_e, p) => mkModal('Non-Standard Settle', (eng) => maskByPredicate(eng, 'daysToSettle', (v) => (+v || 0) > 2), 'info', ['description', 'isin', 'daysToSettle', 'isNewIssue'])(p),
+        }, FLAGS);
+
+        // ────── Claimed ──────
+
+        pill('custom', {
+            id: 'pill_claimed_bonds_sum', columns: ['claimed'], type: 'portfolio',
+            valueGetter: async (data) => {
+                const arr = Array.isArray(data) ? data : Object.values(data || {})[0] || [];
+                let sum = 0; let any = false;
+                const mask = new Array(arr.length);
+                for (let i = 0; i < arr.length; i++) {
+                    const v = arr[i];
+                    const n = (v == null || v === '') ? 0 : (v ? 1 : 0);
+                    if (n > 0) { any = true; sum += n; mask[i] = true; } else mask[i] = false;
+                }
+                return any ? { sum, mask } : null;
+            },
+            valueFormatter: (obj) => obj ? `Claimed Bonds: ${Math.round(obj.sum)}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'claimed', (v) => v != null && v !== '' && v)));
+                },
+            },
+            modal: (_e, p) => {
+                const eng = p.mgr.engine;
+                if (!eng) return;
+                const mask = maskByPredicate(eng, 'claimed', (v) => v != null && v !== '' && v);
+                let sum = 0;
+                for (let i = 0; i < mask.length; i++) if (mask[i]) sum++;
+                const lines = buildLines(eng, mask);
+                const payload = modalPayload(`Claimed Bonds: ${sum}`, lines, ['description', 'isin'], 'portfolio');
+                p.mgr.createInfoModal(payload.title, payload.content, payload.type);
+            },
+        }, FLAGS);
+
+        // ────── Concentration ──────
+
+        pill('custom', {
+            id: 'pill_single_name_concentration', columns: ['ticker', 'grossSize'], type: 'warning',
+            valueGetter: async (data) => {
+                const tickers = data?.ticker || [];
+                const sizes = data?.grossSize || [];
+                const weights = new Map();
+                let total = 0;
+                for (let i = 0; i < tickers.length; i++) {
+                    if (_isNullish(tickers[i])) continue;
+                    const t = String(tickers[i]).trim();
+                    const s = Math.abs(+sizes[i] || 0);
+                    total += s;
+                    weights.set(t, (weights.get(t) || 0) + s);
+                }
+                if (total === 0) return null;
+                let maxTicker = null, maxPct = 0;
+                for (const [t, w] of weights) {
+                    const pct = w / total;
+                    if (pct > maxPct) { maxPct = pct; maxTicker = t; }
+                }
+                return maxPct > 0.25 ? { ticker: maxTicker, pct: maxPct, weights, total } : null;
+            },
+            valueFormatter: (v) => v ? `${v.ticker} is ${Math.round(v.pct * 100)}% of Gross` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    const n = eng.numRows() | 0;
+                    const getTicker = eng._getValueGetter('ticker');
+                    const getSize = eng._getValueGetter('grossSize');
+                    const weights = new Map();
+                    let total = 0;
+                    for (let i = 0; i < n; i++) {
+                        if (_isNullish(getTicker(i))) continue;
+                        const t = String(getTicker(i)).trim();
+                        const s = Math.abs(+getSize(i) || 0);
+                        total += s;
+                        weights.set(t, (weights.get(t) || 0) + s);
+                    }
+                    if (total === 0) return '';
+                    const lines = [];
+                    for (const [t, w] of weights) {
+                        const pct = w / total;
+                        if (pct > 0.25) lines.push(`${t}: ${Math.round(pct * 100)}%`);
+                    }
+                    return lines.join('\n') || '';
+                },
+            },
+            modal: (_e, p) => {
+                const eng = p.mgr.engine;
+                if (!eng) return;
+                const n = eng.numRows() | 0;
+                const getTicker = eng._getValueGetter('ticker');
+                const getSize = eng._getValueGetter('grossSize');
+                const weights = new Map();
+                let total = 0;
+                for (let i = 0; i < n; i++) {
+                    if (_isNullish(getTicker(i))) continue;
+                    const t = String(getTicker(i)).trim();
+                    const s = Math.abs(+getSize(i) || 0);
+                    total += s;
+                    weights.set(t, (weights.get(t) || 0) + s);
+                }
+                const concentrated = new Set();
+                for (const [t, w] of weights) { if (w / total > 0.25) concentrated.add(t); }
+                const mask = new Uint8Array(n);
+                for (let i = 0; i < n; i++) {
+                    const tv = getTicker(i);
+                    if (!_isNullish(tv) && concentrated.has(String(tv).trim())) mask[i] = 1;
+                }
+                mkModal('Single-Name Concentration', () => mask, 'warning', {
+                    ticker: 'Ticker', description: 'Description', isin: 'ISIN', grossSize: 'Size',
+                })(p);
+            },
+        }, FLAGS);
+
+        pill('custom', {
+            id: 'pill_sector_concentration', columns: ['issuerIndustrySector', 'grossSize'], type: 'warning',
+            valueGetter: async (data) => {
+                const sectors = data?.issuerIndustrySector || [];
+                const sizes = data?.grossSize || [];
+                const weights = new Map();
+                let total = 0;
+                for (let i = 0; i < sectors.length; i++) {
+                    if (_isNullish(sectors[i])) continue;
+                    const s = String(sectors[i]).trim();
+                    const sz = Math.abs(+sizes[i] || 0);
+                    total += sz;
+                    weights.set(s, (weights.get(s) || 0) + sz);
+                }
+                if (total === 0) return null;
+                let maxSector = null, maxPct = 0;
+                for (const [s, w] of weights) {
+                    const pct = w / total;
+                    if (pct > maxPct) { maxPct = pct; maxSector = s; }
+                }
+                return maxPct > 0.4 ? { sector: maxSector, pct: maxPct } : null;
+            },
+            valueFormatter: (v) => v ? `Sector: ${v.sector} ${Math.round(v.pct * 100)}%` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    const n = eng.numRows() | 0;
+                    const getSector = eng._getValueGetter('issuerIndustrySector');
+                    const getSize = eng._getValueGetter('grossSize');
+                    const weights = new Map();
+                    let total = 0;
+                    for (let i = 0; i < n; i++) {
+                        if (_isNullish(getSector(i))) continue;
+                        const s = String(getSector(i)).trim();
+                        const sz = Math.abs(+getSize(i) || 0);
+                        total += sz;
+                        weights.set(s, (weights.get(s) || 0) + sz);
+                    }
+                    if (total === 0) return '';
+                    const lines = [];
+                    for (const [s, w] of weights) {
+                        const pct = w / total;
+                        if (pct > 0.4) lines.push(`${s}: ${Math.round(pct * 100)}%`);
+                    }
+                    return lines.join('\n') || '';
+                },
+            },
+            modal: (_e, p) => {
+                const eng = p.mgr.engine;
+                if (!eng) return;
+                const n = eng.numRows() | 0;
+                const getSector = eng._getValueGetter('issuerIndustrySector');
+                const getSize = eng._getValueGetter('grossSize');
+                const weights = new Map();
+                let total = 0;
+                for (let i = 0; i < n; i++) {
+                    if (_isNullish(getSector(i))) continue;
+                    const s = String(getSector(i)).trim();
+                    const sz = Math.abs(+getSize(i) || 0);
+                    total += sz;
+                    weights.set(s, (weights.get(s) || 0) + sz);
+                }
+                const concentrated = new Set();
+                for (const [s, w] of weights) { if (w / total > 0.4) concentrated.add(s); }
+                const mask = new Uint8Array(n);
+                for (let i = 0; i < n; i++) {
+                    const sv = getSector(i);
+                    if (!_isNullish(sv) && concentrated.has(String(sv).trim())) mask[i] = 1;
+                }
+                mkModal('Sector Concentration', () => mask, 'warning', {
+                    issuerIndustrySector: 'Sector', issuerIndustry: 'Industry', description: 'Description', grossSize: 'Size',
+                })(p);
+            },
+        }, FLAGS);
+
+        // ────── Liquidity ──────
+
+        pill('custom', {
+            id: 'pill_liq_score_divergence', columns: ['macpLiqScore', 'lqaLiqScore'], type: 'warning',
+            valueGetter: async (data) => {
+                const macp = data?.macpLiqScore || [];
+                const lqa = data?.lqaLiqScore || [];
+                let count = 0;
+                for (let i = 0; i < Math.max(macp.length, lqa.length); i++) {
+                    if (_isNullish(macp[i]) || _isNullish(lqa[i])) continue;
+                    const m = +macp[i], l = +lqa[i] / 100;
+                    if (!Number.isFinite(m) || !Number.isFinite(l)) continue;
+                    if (Math.abs(m - l) > 2) count++;
+                }
+                return count > 0 ? count : null;
+            },
+            valueFormatter: (count) => count ? `Liq Score Divergence: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    const n = eng.numRows() | 0;
+                    const getM = eng._getValueGetter('macpLiqScore');
+                    const getL = eng._getValueGetter('lqaLiqScore');
+                    const mask = new Uint8Array(n);
+                    for (let i = 0; i < n; i++) {
+                        if (_isNullish(getM(i)) || _isNullish(getL(i))) continue;
+                        const m = +getM(i), l = +getL(i) / 100;
+                        if (!Number.isFinite(m) || !Number.isFinite(l)) continue;
+                        if (Math.abs(m - l) > 2) mask[i] = 1;
+                    }
+                    return tooltipFromLines(buildLines(eng, mask, ['description', 'macpLiqScore', 'lqaLiqScore']));
+                },
+            },
+            modal: (_e, p) => {
+                const eng = p.mgr.engine;
+                if (!eng) return;
+                const n = eng.numRows() | 0;
+                const getM = eng._getValueGetter('macpLiqScore');
+                const getL = eng._getValueGetter('lqaLiqScore');
+                const mask = new Uint8Array(n);
+                for (let i = 0; i < n; i++) {
+                    if (_isNullish(getM(i)) || _isNullish(getL(i))) continue;
+                    const m = +getM(i), l = +getL(i) / 100;
+                    if (!Number.isFinite(m) || !Number.isFinite(l)) continue;
+                    if (Math.abs(m - l) > 2) mask[i] = 1;
+                }
+                mkModal('Liquidity Score Divergence (CP+ vs LQA)', () => mask, 'warning', {
+                    description: 'Description', isin: 'ISIN', macpLiqScore: 'CP+ Score', lqaLiqScore: 'LQA Score (raw)',
+                })(p);
+            },
+        }, FLAGS);
+
+        // ────── Data Quality ──────
+
+        pill('custom', {
+            id: 'pill_duplicate_isins', columns: 'isin', type: 'error',
+            valueGetter: async (data) => {
+                const arr = Array.isArray(data) ? data : Object.values(data || {})[0] || [];
+                const counts = new Map();
+                for (const v of arr) {
+                    if (_isNullish(v)) continue;
+                    const k = String(v).trim();
+                    counts.set(k, (counts.get(k) || 0) + 1);
+                }
+                let dupes = 0;
+                for (const n of counts.values()) if (n > 1) dupes += n;
+                return dupes > 0 ? dupes : null;
+            },
+            valueFormatter: (count) => count ? `Duplicate ISINs: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    const n = eng.numRows() | 0;
+                    const getter = eng._getValueGetter('isin');
+                    const counts = new Map();
+                    for (let i = 0; i < n; i++) {
+                        const v = getter(i);
+                        if (_isNullish(v)) continue;
+                        const k = String(v).trim();
+                        counts.set(k, (counts.get(k) || 0) + 1);
+                    }
+                    const mask = new Uint8Array(n);
+                    for (let i = 0; i < n; i++) {
+                        const v = getter(i);
+                        if (!_isNullish(v) && counts.get(String(v).trim()) > 1) mask[i] = 1;
+                    }
+                    return tooltipFromLines(buildLines(eng, mask));
+                },
+            },
+            modal: (_e, p) => {
+                const eng = p.mgr.engine;
+                if (!eng) return;
+                const n = eng.numRows() | 0;
+                const getter = eng._getValueGetter('isin');
+                const counts = new Map();
+                for (let i = 0; i < n; i++) {
+                    const v = getter(i);
+                    if (_isNullish(v)) continue;
+                    const k = String(v).trim();
+                    counts.set(k, (counts.get(k) || 0) + 1);
+                }
+                const mask = new Uint8Array(n);
+                for (let i = 0; i < n; i++) {
+                    const v = getter(i);
+                    if (!_isNullish(v) && counts.get(String(v).trim()) > 1) mask[i] = 1;
+                }
+                mkModal('Duplicate ISINs', () => mask, 'error', {
+                    isin: 'ISIN', description: 'Description', userSide: 'Side', grossSize: 'Size',
+                }, null, ['isin'])(p);
+            },
+        }, FLAGS);
+
+        pill('custom', {
+            id: 'pill_matured_bonds', columns: 'maturityDate', type: 'error',
+            valueGetter: async (data) => {
+                const arr = Array.isArray(data) ? data : Object.values(data || {})[0] || [];
+                const now = Date.now();
+                let count = 0;
+                for (const v of arr) {
+                    if (_isNullish(v) || v === 0 || v === false) continue;
+                    const d = new Date(v);
+                    if (!isNaN(d.getTime()) && d.getTime() < now) count++;
+                }
+                return count > 0 ? count : null;
+            },
+            valueFormatter: (count) => count ? `Matured Bonds: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    const now = Date.now();
+                    return tooltipFromLines(buildLines(eng, maskByPredicate(eng, 'maturityDate', (v) => {
+                        if (_isNullish(v) || v === 0 || v === false) return false;
+                        const d = new Date(v);
+                        return !isNaN(d.getTime()) && d.getTime() < now;
+                    })));
+                },
+            },
+            modal: (_e, p) => {
+                const now = Date.now();
+                mkModal('Matured Bonds', (eng) => maskByPredicate(eng, 'maturityDate', (v) => {
+                    if (_isNullish(v) || v === 0 || v === false) return false;
+                    const d = new Date(v);
+                    return !isNaN(d.getTime()) && d.getTime() < now;
+                }), 'error', ['description', 'isin', 'maturityDate', 'grossSize'])(p);
+            },
+        }, FLAGS);
+
+        // ────── Low Amount Outstanding / Issued Ratio ──────
+
+        const OUTSTANDING_THRESHOLD = 0.25;
+
+        pill('custom', {
+            id: 'pill_low_outstanding_ratio', columns: ['amountOutstanding', 'amountIssued'], type: 'warning',
+            valueGetter: async (data) => {
+                const outstanding = data?.amountOutstanding || [];
+                const issued = data?.amountIssued || [];
+                let count = 0;
+                for (let i = 0; i < outstanding.length; i++) {
+                    if (_isNullish(outstanding[i]) || _isNullish(issued[i])) continue;
+                    const o = +outstanding[i], iss = +issued[i];
+                    if (!Number.isFinite(o) || !Number.isFinite(iss) || iss <= 0) continue;
+                    if (o / iss < OUTSTANDING_THRESHOLD) count++;
+                }
+                return count > 0 ? count : null;
+            },
+            valueFormatter: (count) => count ? `Low Amt Outstanding: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    const getO = eng._getValueGetter('amountOutstanding');
+                    const getI = eng._getValueGetter('amountIssued');
+                    const n = eng.numRows() | 0;
+                    const lines = [];
+                    for (let i = 0; i < n && lines.length < 8; i++) {
+                        const o = getO(i), iss = getI(i);
+                        if (_isNullish(o) || _isNullish(iss)) continue;
+                        const on = +o, isn = +iss;
+                        if (!Number.isFinite(on) || !Number.isFinite(isn) || isn <= 0) continue;
+                        if (on / isn < OUTSTANDING_THRESHOLD) {
+                            const desc = eng._getValueGetter('description')(i);
+                            lines.push(`${desc || '?'} — ${Math.round(on / isn * 100)}%`);
+                        }
+                    }
+                    return lines.join('\n') || '';
+                },
+            },
+            modal: (_e, p) => {
+                const eng = p.mgr.engine;
+                if (!eng) return;
+                const n = eng.numRows() | 0;
+                const getO = eng._getValueGetter('amountOutstanding');
+                const getI = eng._getValueGetter('amountIssued');
+                const getDesc = eng._getValueGetter('description');
+                const getIsin = eng._getValueGetter('isin');
+                const fmtAmt = (v) => NumberFormatter.formatNumber(v, { prefix: '', sigFigs: { global: 0 } });
+
+                const headers = ['Description', 'ISIN', 'Amt Outstanding', 'Amt Issued', '% Outstanding'];
+                const rows = [];
+                for (let i = 0; i < n; i++) {
+                    const o = getO(i), iss = getI(i);
+                    if (_isNullish(o) || _isNullish(iss)) continue;
+                    const on = +o, isn = +iss;
+                    if (!Number.isFinite(on) || !Number.isFinite(isn) || isn <= 0) continue;
+                    if (on / isn >= OUTSTANDING_THRESHOLD) continue;
+                    rows.push([
+                        String(getDesc(i) ?? ''),
+                        String(getIsin(i) ?? ''),
+                        fmtAmt(on),
+                        fmtAmt(isn),
+                        `${Math.round(on / isn * 100)}%`,
+                    ]);
+                }
+
+                const tableData = [headers, ...rows];
+                const table = buildTable(tableData);
+                const sub = rows.length > 0 ? `${rows.length} bond${rows.length > 1 ? 's' : ''}` : null;
+                const html = table ? table.outerHTML : '<p>No matching rows.</p>';
+                p.mgr.createInfoModal('Low Amount Outstanding', html, 'warning', sub);
+            },
+        }, FLAGS);
+
+        // ────── Reference Market Mid Variance ──────
+
+        const REF_MARKETS_BASE = ['bval', 'macp', 'cbbt'];
+        const REF_MARKETS_ALL = ['bval', 'macp', 'cbbt', 'am'];
+        const QT_TO_SUFFIX = { PX: 'Px', SPD: 'Spd', YLD: 'Yld', DM: 'Dm', MMY: 'Mmy' };
+        const REF_VAR_PCT = 0.10;    // 10% divergence threshold
+        const REF_VAR_ABS = 0.5;     // absolute range guard
+        const REF_VAR_EPS = 0.01;    // near-zero mean epsilon
+
+        const allRefMidCols = REF_MARKETS_ALL.flatMap(m =>
+            Object.values(QT_TO_SUFFIX).map(s => `${m}Mid${s}`)
+        );
+
+        /** true when bond is floater, perpetual, or hybrid → include AM */
+        function _isAmEligible(data, i) {
+            const fl = data?.isFloater;
+            const pp = data?.isPerpetual;
+            const hy = data?.isHybrid;
+            return coerceToBool(fl?.[i]) || coerceToBool(pp?.[i]) || coerceToBool(hy?.[i]);
+        }
+
+        function _isAmEligibleEng(eng, i) {
+            return coerceToBool(eng._getValueGetter('isFloater')(i))
+                || coerceToBool(eng._getValueGetter('isPerpetual')(i))
+                || coerceToBool(eng._getValueGetter('isHybrid')(i));
+        }
+
+        function _getRefMids(data, i, suffix, markets) {
+            const vals = [];
+            for (const mkt of markets) {
+                const col = `${mkt}Mid${suffix}`;
+                const arr = data[col];
+                if (!arr) continue;
+                const v = arr[i];
+                if (_isNullish(v)) continue;
+                const n = +v;
+                if (Number.isFinite(n)) vals.push({ mkt, val: n });
+            }
+            return vals;
+        }
+
+        function _hasHighRefVariance(mids) {
+            if (mids.length < 2) return false;
+            let min = Infinity, max = -Infinity, sum = 0;
+            for (const { val } of mids) {
+                if (val < min) min = val;
+                if (val > max) max = val;
+                sum += val;
+            }
+            const range = max - min;
+            if (range < REF_VAR_ABS) return false;
+            const mean = sum / mids.length;
+            if (Math.abs(mean) < REF_VAR_EPS) return true; // near-zero mean + material range
+            return range / Math.abs(mean) > REF_VAR_PCT;
+        }
+
+        function _normalizeQt(raw) {
+            if (_isNullish(raw)) return null;
+            const s = String(raw).trim().toUpperCase();
+            const mapped = QT_MAP[s.toLowerCase()];
+            return mapped || s;
+        }
+
+        pill('custom', {
+            id: 'pill_ref_market_variance',
+            columns: ['QT', 'isFloater', 'isPerpetual', 'isHybrid', ...allRefMidCols],
+            type: 'warning',
+            valueGetter: async (data) => {
+                const qtArr = data?.QT || [];
+                let count = 0;
+                for (let i = 0; i < qtArr.length; i++) {
+                    const qt = _normalizeQt(qtArr[i]);
+                    if (!qt) continue;
+                    const suffix = QT_TO_SUFFIX[qt];
+                    if (!suffix) continue;
+                    const markets = _isAmEligible(data, i) ? REF_MARKETS_ALL : REF_MARKETS_BASE;
+                    const mids = _getRefMids(data, i, suffix, markets);
+                    if (_hasHighRefVariance(mids)) count++;
+                }
+                return count > 0 ? count : null;
+            },
+            valueFormatter: (count) => count ? `Ref Market Variance: ${count}` : null,
+            tooltip: true,
+            tooltipConfig: {
+                content: () => {
+                    const eng = pills.engine;
+                    if (!eng) return '';
+                    const n = eng.numRows() | 0;
+                    const getQt = eng._getValueGetter('QT');
+                    const getDesc = eng._getValueGetter('description');
+                    const lines = [];
+                    for (let i = 0; i < n && lines.length < 8; i++) {
+                        const qt = _normalizeQt(getQt(i));
+                        if (!qt) continue;
+                        const suffix = QT_TO_SUFFIX[qt];
+                        if (!suffix) continue;
+                        const useAm = _isAmEligibleEng(eng, i);
+                        const markets = useAm ? REF_MARKETS_ALL : REF_MARKETS_BASE;
+                        const mids = [];
+                        for (const mkt of markets) {
+                            const v = eng._getValueGetter(`${mkt}Mid${suffix}`)(i);
+                            if (!_isNullish(v) && Number.isFinite(+v)) mids.push({ mkt, val: +v });
+                        }
+                        if (_hasHighRefVariance(mids)) {
+                            const parts = mids.map(m => `${m.mkt.toUpperCase()}=${(m.val).toFixed(2)}`).join(', ');
+                            lines.push(`${getDesc(i) || '?'} - ${parts}`);
+                        }
+                    }
+                    return lines.join('\n') || '';
+                },
+            },
+            modal: (_e, p) => {
+                const eng = p.mgr.engine;
+                if (!eng) return;
+                const n = eng.numRows() | 0;
+                const getQt = eng._getValueGetter('QT');
+
+                // Build rows with per-bond QT-driven columns
+                const headers = ['Description', 'ISIN', 'QT', 'BVAL', 'MACP', 'CBBT', 'AM'];
+                const mktKeys = ['bval', 'macp', 'cbbt', 'am'];
+                const rows = [];
+                const getDesc = eng._getValueGetter('description');
+                const getIsin = eng._getValueGetter('isin');
+
+                const headers = ['Description', 'ISIN', 'QT', 'BVAL', 'MACP', 'CBBT', 'AM'];
+                const mktKeys = ['bval', 'macp', 'cbbt', 'am'];
+
+                const rowData = [];
+                for (let i = 0; i < n; i++) {
+                    const qt = _normalizeQt(getQt(i));
+                    if (!qt) continue;
+                    const suffix = QT_TO_SUFFIX[qt];
+                    if (!suffix) continue;
+                    const useAm = _isAmEligibleEng(eng, i);
+                    const markets = useAm ? REF_MARKETS_ALL : REF_MARKETS_BASE;
+                    const mids = [];
+                    const vals = {};
+                    for (const mkt of markets) {
+                        const v = eng._getValueGetter(`${mkt}Mid${suffix}`)(i);
+                        if (!_isNullish(v) && Number.isFinite(+v)) {
+                            mids.push({ mkt, val: +v });
+                            vals[mkt] = (+v).toFixed(3);
+                        }
+                    }
+                    if (!_hasHighRefVariance(mids)) continue;
+                    // Identify outlier: market furthest from mean
+                    const mean = mids.reduce((s, m) => s + m.val, 0) / mids.length;
+                    let outlierMkt = null, maxDev = 0;
+                    for (const { mkt, val } of mids) {
+                        const dev = Math.abs(val - mean);
+                        if (dev > maxDev) { maxDev = dev; outlierMkt = mkt; }
+                    }
+
+                    rows.push({
+                        cells: [
+                            String(getDesc(i) ?? ''), String(getIsin(i) ?? ''), qt,
+                            ...mktKeys.map(k => vals[k] != null ? _fmtModalVal(vals[k], `${k}Mid${suffix}`) : ''),
+                        ],
+                        outlierMkt,
+                        useAm,
+                    });
+                }
+
+                // Build table DOM manually to highlight outlier cells
+                const table = document.createElement('table');
+                table.classList.add('overview-modal-table');
+                const thead = document.createElement('thead');
+                const headTr = document.createElement('tr');
+                for (const h of headers) {
+                    const th = document.createElement('th');
+                    th.textContent = h;
+                    headTr.appendChild(th);
+                }
+                thead.appendChild(headTr);
+                table.appendChild(thead);
+
+                const tbody = document.createElement('tbody');
+                for (const { cells, outlierMkt, useAm } of rowData) {
+                    const tr = document.createElement('tr');
+                    for (let c = 0; c < cells.length; c++) {
+                        const td = document.createElement('td');
+                        td.textContent = cells[c];
+                        // Columns 3-6 map to mktKeys[0-3]; only highlight AM (idx 3) when eligible
+                        if (c >= 3 && mktKeys[c - 3] === outlierMkt) {
+                            if (mktKeys[c - 3] !== 'am' || useAm) {
+                                td.style.color = '#e05252';
+                                td.style.fontWeight = '600';
+                            }
+                        }
+                        tr.appendChild(td);
+                    }
+                    tbody.appendChild(tr);
+                }
+                table.appendChild(tbody);
+
+                const sub = rows.length > 0 ? `${rows.length} bond${rows.length > 1 ? 's' : ''}` : null;
+                const html = table.outerHTML;
+                p.mgr.createInfoModal('Ref Market Variance', html, 'warning', sub);
+            },
+        }, FLAGS);
     }
 
     /* ════════════════════════════════════════════════════════════════════════
@@ -780,6 +1967,7 @@ export class OverviewWidget extends BaseWidget {
         const totalWeight = weightKey === 'grossSize' ? totalGrossSize : (weightKey === 'grossDv01' ? totalDv01 : totalRisk);
 
         const totals = { totalGrossSize, totalDv01, totalRisk, totalCount: portfolio.length, totalWeight, weightKey };
+        this._cachedTotals = { grossSize: totalGrossSize, grossDv01: totalDv01, _normalizedRisk: totalRisk };
 
         // ──── Fan out to sub-renderers (all receive the same data) ────
         this.updateAllKpis(portfolio, totals);
