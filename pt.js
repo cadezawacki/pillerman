@@ -325,6 +325,12 @@ export class PortfolioPage extends PageBase {
                 this._applyImpersonateVisuals(on);
             });
         }
+        const dev_pull_url = 'http://nykpwm20879513:8889/api/pt/portfolio/pull-to-dev?portfolioKey='
+        const btn = document.querySelector('#frame-pull button')
+        this.addEventListener(btn, 'click', async (event) => {
+            await fetch(dev_pull_url + this.context.portfolio_key.toLowerCase());
+            window.location.reload();
+        })
     }
 
     _updateStatusDisplay({force=false}={}) {
@@ -391,6 +397,7 @@ export class PortfolioPage extends PageBase {
         this.settingsButton = document.getElementById("settingsBtn");
         this.pricingContainer = document.querySelector(".pricing-progress-container");
         this.toolbarTop = document.querySelector('.toolbar-top');
+        this.push_pull_buttons = document.querySelector('#frame-test-button-wrapper');
         this.scrollContainer = document.querySelector('#portfolio-content-shadow');
         this.portfolioBody = document.getElementById("portfolioBody");
         this.quoteTypeDisplay = document.getElementById('portfolio-current-quote-type');
@@ -918,7 +925,10 @@ export class PortfolioPage extends PageBase {
     _setupDropdown() {
         if (this.stateDropdown) {
             this.stateDropdown.innerHTML = ''; // Clear existing
-            ["LIVE", 'WON', 'COVERED', 'MISSED', 'DNT', 'PASSED', 'NETDOWN', 'INDICATIVE', 'ERROR', 'CANCELLED', "EXPIRED", 'NEW', 'PENDING', 'TEST', "TRANSFER", 'OTHER', 'UNKNOWN'].forEach(stateValue => {
+            [
+                "LIVE", 'WON', 'COVERED', 'MISSED', 'DNT', 'PASSED', 'NETDOWN', 'INDICATIVE', 'ERROR', 'CANCELLED',
+                "EXPIRED", 'NEW', 'PENDING', 'TEST', "TRANSFER", 'OTHER', 'UNKNOWN', 'TIED'
+            ].forEach(stateValue => {
                 this.stateDropdown.appendChild(this._renderStateEditorOption(stateValue));
             });
         }
@@ -1348,6 +1358,8 @@ export class PortfolioPage extends PageBase {
             case 'INDICATIVE':
             case 'UNKNOWN':
                 return this.setFavicon('purple');
+            case 'TIED':
+                return this.setFavicon('gold');
             default:
                 return this.setFavicon()
         }
@@ -1398,6 +1410,7 @@ export class PortfolioPage extends PageBase {
         this._subs.push(this.page$.onValueConfirmed('domAnimationFinished', () => {
             this._setupGridSearch();
             this.contentArea?.classList.add('initialized');
+            this.push_pull_buttons.classList.remove('hidden');
         }));
 
         // dueTime subscription is registered once (not nested inside rfqSide) to

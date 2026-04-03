@@ -1,6 +1,7 @@
 
 
 
+
 import { license } from '@/config/licenses.js';
 import { LicenseManager, createGrid} from 'ag-grid-enterprise';
 LicenseManager.setLicenseKey(license);
@@ -218,7 +219,11 @@ function _buildArrowTableFromRows(schema, rows) {
 
     for (let i = 0; i < fields.length; i++) {
         const f = fields[i];
-        const b = arrow.makeBuilder({ type: f.type, nullValues: [null, undefined] });
+        // Downgrade Int64/BigInt types to Float64 so the builder never expects BigInt values
+        const isBigIntType = (f.type instanceof arrow.Int64) ||
+            ((f.type instanceof arrow.Int) && f.type.bitWidth === 64);
+        const builderType = isBigIntType ? new arrow.Float64() : f.type;
+        const b = arrow.makeBuilder({ type: builderType, nullValues: [null, undefined] });
         for (let r = 0; r < rows.length; r++) {
             const row = rows[r];
             const v = row && Object.prototype.hasOwnProperty.call(row, f.name) ? _coerceArrowScalar(row[f.name]) : null;
@@ -261,7 +266,11 @@ function _tryConcatArrowTables(left, right) {
         for (let r = 0; r < ln; r++) arr[r] = _coerceArrowScalar(lv.get(r));
         for (let r = 0; r < rn; r++) arr[ln + r] = _coerceArrowScalar(rv.get(r));
 
-        const b = arrow.makeBuilder({ type: f.type, nullValues: [null, undefined] });
+        // Downgrade Int64/BigInt types to Float64 so the builder never expects BigInt values
+        const isBigIntType = (f.type instanceof arrow.Int64) ||
+            ((f.type instanceof arrow.Int) && f.type.bitWidth === 64);
+        const builderType = isBigIntType ? new arrow.Float64() : f.type;
+        const b = arrow.makeBuilder({ type: builderType, nullValues: [null, undefined] });
         for (let r = 0; r < total; r++) b.append(arr[r]);
         outCols[f.name] = b.finish().toVector();
     }
@@ -878,7 +887,10 @@ function buildEmptyTableFromSchema(schema) {
     const outCols = {};
     for (let i = 0; i < schema.fields.length; i++) {
         const f = schema.fields[i];
-        const b = arrow.makeBuilder({ type: f.type, nullValues: [null, undefined] });
+        const isBigIntType = (f.type instanceof arrow.Int64) ||
+            ((f.type instanceof arrow.Int) && f.type.bitWidth === 64);
+        const builderType = isBigIntType ? new arrow.Float64() : f.type;
+        const b = arrow.makeBuilder({ type: builderType, nullValues: [null, undefined] });
         outCols[f.name] = b.finish().toVector(); // zero‑length
     }
     return new arrow.Table(outCols);
@@ -2825,13 +2837,16 @@ export class ArrowEngine {
             const should = (commit === true) || (commit !== false && density >= this._autoCommitThreshold);
             if (!should) { tableColumns[name] = vec; continue; }
 
-            const builder = arrow.makeBuilder({ type: vec.type, nullValues: [null, undefined] });
+            const isBigIntType = (vec.type instanceof arrow.Int64) ||
+                ((vec.type instanceof arrow.Int) && vec.type.bitWidth === 64);
+            const builderType = isBigIntType ? new arrow.Float64() : vec.type;
+            const builder = arrow.makeBuilder({ type: builderType, nullValues: [null, undefined] });
 
             if (ov.kind === 'number') {
                 const mask = ov.mask, vals = ov.values;
                 for (let r = 0; r < n; r++) {
                     const m = mask[r] | 0;
-                    if (m === MASK_NONE) { builder.append(vec.get(r)); continue; }
+                    if (m === MASK_NONE) { let val = vec.get(r); if (typeof val === 'bigint') val = Number(val); builder.append(val); continue; }
                     if (m === MASK_NULL) { builder.append(null); continue; }
                     const v = vals[r];
                     builder.append(Number.isFinite(v) ? v : null);
@@ -2839,8 +2854,8 @@ export class ArrowEngine {
             } else {
                 const mp = ov.map || new Map();
                 for (let r = 0; r < n; r++) {
-                    if (mp.has(r)) builder.append(mp.get(r));
-                    else builder.append(vec.get(r));
+                    if (mp.has(r)) { let val = mp.get(r); if (typeof val === 'bigint') val = Number(val); builder.append(val); }
+                    else { let val = vec.get(r); if (typeof val === 'bigint') val = Number(val); builder.append(val); }
                 }
             }
 
@@ -3935,7 +3950,11 @@ export class ArrowEngine {
         const fields = schema.fields;
         const builders = {};
         fields.forEach((field) => {
-            builders[field.name] = arrow.makeBuilder({ type: field.type, nullValues: [null, undefined] });
+            // Downgrade Int64/BigInt types to Float64 so the builder never expects BigInt values
+            const isBigIntType = (field.type instanceof arrow.Int64) ||
+                ((field.type instanceof arrow.Int) && field.type.bitWidth === 64);
+            const builderType = isBigIntType ? new arrow.Float64() : field.type;
+            builders[field.name] = arrow.makeBuilder({ type: builderType, nullValues: [null, undefined] });
         });
 
         for (const row of rows) {
@@ -3947,11 +3966,8 @@ export class ArrowEngine {
                 let value = typeof row.get === 'function' ? row.get(fieldName) : row[fieldName];
                 if (value == null) { b.append(null); continue; }
                 try {
-                    const isBig =
-                        (field.type instanceof arrow.Int64) ||
-                        ((field.type instanceof arrow.Int) && field.type.bitWidth === 64) ||
-                        (typeof value === 'bigint')
-                    b.append(isBig ? BigInt(value) : value);
+                    if (typeof value === 'bigint') value = Number(value);
+                    b.append(value);
                 } catch (e) { console.error(`Error appending to builder for ${fieldName}:`, e); b.append(null); }
             }
         }
@@ -4081,7 +4097,10 @@ export class ArrowEngine {
             const dec = this._getDecoder(name);
             // Use a typed Arrow builder so makeTable doesn't fail on
             // all-null columns where the type can't be inferred from values.
-            const builder = arrow.makeBuilder({ type: vec.type, nullValues: [null, undefined] });
+            const isBigIntType = (vec.type instanceof arrow.Int64) ||
+                ((vec.type instanceof arrow.Int) && vec.type.bitWidth === 64);
+            const builderType = isBigIntType ? new arrow.Float64() : vec.type;
+            const builder = arrow.makeBuilder({ type: builderType, nullValues: [null, undefined] });
             for (let src = 0; src < n0; src++) {
                 if (removedSet.has(src)) continue;
                 let v;
@@ -4165,7 +4184,10 @@ export class ArrowEngine {
             const vec = this._getVector(name);
             // Use a typed Arrow builder so makeTable doesn't fail on
             // all-null columns where the type can't be inferred from values.
-            const builder = arrow.makeBuilder({ type: vec.type, nullValues: [null, undefined] });
+            const isBigIntType = (vec.type instanceof arrow.Int64) ||
+                ((vec.type instanceof arrow.Int) && vec.type.bitWidth === 64);
+            const builderType = isBigIntType ? new arrow.Float64() : vec.type;
+            const builder = arrow.makeBuilder({ type: builderType, nullValues: [null, undefined] });
             for (let src = 0; src < n0; src++) {
                 if (removedSet.has(src)) continue;
                 let v = vec.get(src);
