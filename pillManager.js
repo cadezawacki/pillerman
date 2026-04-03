@@ -490,7 +490,9 @@ export default class PillManager {
         for (const pill of this.pills.values()) {
             if (!pill.columns || pill.source === 'store') continue;
             if (isGlobal) { pill.update(); continue; }
-            const cols = ensure_list(pill.columns);
+            // Resolve dynamic columns (function) before matching
+            const rawCols = typeof pill.columns === 'function' ? pill.columns(pill) : pill.columns;
+            const cols = ensure_list(rawCols);
             if (cols.some(c => changedSet.has(c))) {
                 pill.update();
             }

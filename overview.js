@@ -526,6 +526,7 @@ export class OverviewWidget extends BaseWidget {
         this.pillManager = this.context.page.pillManager;
         this._rendered = false;
         this._ownedPills = [];
+        this._cachedTotals = null; // { grossSize, grossDv01, _normalizedRisk } — invalidated on epoch-change
         this._debouncedMetaRefresh = null;
         this._stack = null;
         this._headerRow = null;
@@ -577,6 +578,13 @@ export class OverviewWidget extends BaseWidget {
                     });
                 }
                 await this.refreshOverview();
+                // Weight changed — force-update pills with dynamic columns (ETF overlap, etc.)
+                const pm = this.context.page.pillManager;
+                if (pm) {
+                    for (const pill of pm.pills.values()) {
+                        if (typeof pill.columns === 'function') pill.update();
+                    }
+                }
             });
             this._permanentSubs.push(unsub);
         }
@@ -840,7 +848,7 @@ export class OverviewWidget extends BaseWidget {
         }, DETAILS);
 
         pill('custom', {
-            id: 'liquidityBasket', columns: 'liqScoreCombined', source: 'store', type: 'portfolio',
+            id: 'liquidityBasket', columns: 'liqScoreCombined', source: 'store', type: 'status',
             valueGetter: async (_data, p) => p.mgr.context.page._metaStore?.get('liqScoreCombined') ?? null,
             valueFormatter: (score) => {
                 if (score == null) return null;
@@ -848,7 +856,7 @@ export class OverviewWidget extends BaseWidget {
                 if (score < 4) return 'Illiquid Basket';
                 return null;
             },
-            styleRules: [{ gt: 7, color: 'green', type: 'status' }, { lt: 4, color: 'red', type: 'warning' }],
+            styleRules: [{ gt: 7, color: 'green', type: 'status' }, { lt: 4, color: 'red', type: 'error' }],
         }, DETAILS);
 
         pill('custom', {
@@ -932,8 +940,9 @@ export class OverviewWidget extends BaseWidget {
                 id: `pctInEtf-${etf}`, type: 'status',
                 columns: () => [etf, self.getActiveWeightKey()],
                 valueGetter: (data) => {
-                    const wc = Object.keys(data).filter(x => !x.startsWith('inEtf'));
-                    const ws = data[wc[0]]; const es = data[etf];
+                    const wk = self.getActiveWeightKey();
+                    const ws = data[wk]; const es = data[etf];
+                    if (!ws || !es) return null;
                     let num = 0, den = 0;
                     for (let i = 0; i < es.length; i++) {
                         const w = ws[i]; den += w;
@@ -1958,6 +1967,7 @@ export class OverviewWidget extends BaseWidget {
         const totalWeight = weightKey === 'grossSize' ? totalGrossSize : (weightKey === 'grossDv01' ? totalDv01 : totalRisk);
 
         const totals = { totalGrossSize, totalDv01, totalRisk, totalCount: portfolio.length, totalWeight, weightKey };
+        this._cachedTotals = { grossSize: totalGrossSize, grossDv01: totalDv01, _normalizedRisk: totalRisk };
 
         // ──── Fan out to sub-renderers (all receive the same data) ────
         this.updateAllKpis(portfolio, totals);
