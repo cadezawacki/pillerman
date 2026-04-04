@@ -187,7 +187,7 @@ function modalPayload(title, lines, cols, type) {
 const NUMERIC_MODAL_COLS = new Set([
     'grossSize', 'netSize', 'grossDv01', 'netDv01', 'unitDv01',
     'amountOutstanding', 'amountIssued',
-    'firmAggBsrSize', 'duration', 'daysToSettle',
+    'firmAggBsrSize', 'duration',
     'liqScoreCombined', 'macpLiqScore', 'lqaLiqScore',
     'bvalMidPx', 'bvalMidSpd', 'bvalMidYld', 'bvalMidDm', 'bvalMidMmy',
     'macpMidPx', 'macpMidSpd', 'macpMidYld', 'macpMidDm', 'macpMidMmy',
@@ -195,8 +195,55 @@ const NUMERIC_MODAL_COLS = new Set([
     'amMidPx', 'amMidSpd', 'amMidYld', 'amMidDm', 'amMidMmy',
 ]);
 
-function _fmtModalVal(v, col) {
+/** Columns that are whole numbers — format with 0 decimals. */
+const INTEGER_MODAL_COLS = new Set([
+    'daysToSettle',
+]);
+
+/**
+ * Resolve the columnRegistry from a pill, if available.
+ * Returns the Map of column definitions or null.
+ */
+function _getColRegistry(pill) {
+    try {
+        return pill?.mgr?.context?.page?.ptGrid?.columnRegistry?.columns ?? null;
+    } catch (_) { return null; }
+}
+
+/**
+ * Get the display header for a column from the registry, falling back to
+ * the provided override or clean_camel.
+ */
+function _resolveHeader(col, registry, override) {
+    if (override) return override;
+    if (registry) {
+        const def = registry.get(col);
+        if (def?.headerName) return def.headerName;
+    }
+    return clean_camel(col);
+}
+
+/**
+ * Get the dataType for a column from the registry.
+ */
+function _colDataType(col, registry) {
+    if (!registry) return null;
+    return registry.get(col)?.context?.dataType ?? null;
+}
+
+function _fmtModalVal(v, col, registry) {
     if (v == null) return '';
+    // Flag columns → stylized TRUE / FALSE
+    if (_colDataType(col, registry) === 'flag') {
+        const b = (v === 1 || v === '1' || v === true || v === 'true');
+        return b ? 'TRUE' : 'FALSE';
+    }
+    // Integer columns → no decimals
+    if (INTEGER_MODAL_COLS.has(col)) {
+        const n = +v;
+        if (Number.isFinite(n)) return NumberFormatter.formatNumber(n, { prefix: '', sigFigs: { global: 0 } });
+    }
+    // Numeric columns → 2 sig figs
     if (NUMERIC_MODAL_COLS.has(col)) {
         const n = +v;
         if (Number.isFinite(n)) return NumberFormatter.formatNumber(n, { prefix: '', sigFigs: { global: 2 } });
@@ -210,15 +257,17 @@ function mkModal(title, maskFn, type, colSpec, subtitle, sortCols) {
         if (!eng) return { title, content: '<p>No data.</p>', type: type || 'info' };
 
         const mask = maskFn(eng);
+        const registry = _getColRegistry(pill);
         let displayCols;
         let headers;
 
         if (colSpec && typeof colSpec === 'object' && !Array.isArray(colSpec)) {
             displayCols = Object.keys(colSpec);
-            headers = Object.values(colSpec);
+            // Use explicit header if provided, but fall through to registry for null/undefined overrides
+            headers = displayCols.map(c => _resolveHeader(c, registry, colSpec[c]));
         } else {
             displayCols = Array.isArray(colSpec) ? colSpec : ['description', 'isin'];
-            headers = displayCols.map(c => clean_camel(c));
+            headers = displayCols.map(c => _resolveHeader(c, registry));
         }
 
         const getters = displayCols.map(c => eng._getValueGetter(c));
@@ -229,7 +278,7 @@ function mkModal(title, maskFn, type, colSpec, subtitle, sortCols) {
             const row = [];
             for (let c = 0; c < displayCols.length; c++) {
                 const v = getters[c](i);
-                row.push(_fmtModalVal(v, displayCols[c]));
+                row.push(_fmtModalVal(v, displayCols[c], registry));
             }
             rows.push(row);
         }
@@ -1883,7 +1932,7 @@ export class OverviewWidget extends BaseWidget {
                     rows.push({
                         cells: [
                             String(getDesc(i) ?? ''), String(getIsin(i) ?? ''), qt,
-                            ...mktKeys.map(k => vals[k] != null ? _fmtModalVal(vals[k], `${k}Mid${suffix}`) : ''),
+                            ...mktKeys.map(k => vals[k] != null ? _fmtModalVal(vals[k], `${k}Mid${suffix}`, null) : ''),
                         ],
                         outlierMkt,
                         useAm,
