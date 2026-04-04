@@ -491,8 +491,13 @@ export default class PillManager {
             if (!pill.columns || pill.source === 'store') continue;
             if (isGlobal) { pill.update(); continue; }
             // Resolve dynamic columns (function) before matching
-            const rawCols = typeof pill.columns === 'function' ? pill.columns(pill) : pill.columns;
-            const cols = ensure_list(rawCols);
+            let cols;
+            try {
+                const rawCols = typeof pill.columns === 'function' ? pill.columns(pill) : pill.columns;
+                cols = ensure_list(rawCols);
+            } catch (_) {
+                continue; // function columns not ready yet — skip, will catch next epoch
+            }
             if (cols.some(c => changedSet.has(c))) {
                 pill.update();
             }
